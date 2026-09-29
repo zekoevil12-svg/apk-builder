@@ -7,8 +7,18 @@ on:
         required: true
       package_name:
         required: true
-      website_url:
+      source_type:
         required: true
+        default: 'url'
+      website_url:
+        required: false
+        default: 'https://example.com'
+      has_source_file:
+        required: false
+        default: 'no'
+      source_ext:
+        required: false
+        default: ''
       has_icon:
         required: false
         default: 'no'
@@ -16,6 +26,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -35,19 +46,88 @@ jobs:
           npm init -y
           npm install @capacitor/core@5 @capacitor/cli@5 @capacitor/android@5
           mkdir -p www
-          cat > www/index.html << 'EOF'
+
+      - name: Prepare source files
+        run: |
+          cd capacitor-app
+          ST="${{ github.event.inputs.source_type }}"
+
+          if [ "$ST" = "url" ]; then
+            echo "=== URL mode ==="
+            URL="${{ github.event.inputs.website_url }}"
+            cat > www/index.html << EOF
           <!DOCTYPE html>
-          <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-          <title>App</title>
-          <style>html,body,iframe{margin:0;padding:0;width:100%;height:100%;border:none}</style>
+          <html>
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+            <title>App</title>
+            <style>
+              html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+              iframe{border:none;width:100%;height:100%;display:block}
+            </style>
           </head>
-          <body><iframe src="https://example.com" allowfullscreen></iframe></body></html>
+          <body>
+            <iframe src="$URL" allowfullscreen allow="geolocation; microphone; camera"></iframe>
+          </body>
+          </html>
           EOF
+
+          elif [ "$ST" = "html" ]; then
+            echo "=== HTML mode ==="
+            cp ../source-input.html www/index.html
+
+          elif [ "$ST" = "zip" ]; then
+            echo "=== ZIP mode ==="
+            unzip -O UTF-8 -o ../source-input.zip -d www_extract 2>&1 || \
+            unzip -o ../source-input.zip -d www_extract 2>&1
+
+            ENTRY_COUNT=$(ls -1 www_extract | wc -l)
+            if [ "$ENTRY_COUNT" = "1" ] && [ -d "www_extract/$(ls -1 www_extract)" ]; then
+              INNER=$(ls -1 www_extract)
+              echo "Single top folder detected: $INNER"
+              mv www_extract/$INNER/* www/ 2>/dev/null || true
+              mv www_extract/$INNER/.[!.]* www/ 2>/dev/null || true
+            else
+              mv www_extract/* www/ 2>/dev/null || true
+              mv www_extract/.[!.]* www/ 2>/dev/null || true
+            fi
+            rm -rf www_extract
+
+            if [ ! -f www/index.html ]; then
+              FOUND=$(find www -maxdepth 4 -name "index.html" -o -name "index.htm" | head -1)
+              if [ -n "$FOUND" ]; then
+                DIR=$(dirname "$FOUND")
+                echo "Found index at $DIR, lifting..."
+                cp -r "$DIR"/* www/ 2>/dev/null || true
+              fi
+            fi
+
+            echo "=== www contents ==="
+            ls -la www/
+            echo "=== image files ==="
+            find www -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.ico" \) | head -20
+          fi
+
+          if [ ! -f www/index.html ]; then
+            echo "❌ لا يوجد index.html!"
+            exit 1
+          fi
+
+          find www -type f | while read f; do
+            NEW=$(echo "$f" | sed 's/ /_/g')
+            if [ "$f" != "$NEW" ]; then
+              mv "$f" "$NEW" 2>/dev/null || true
+            fi
+          done
 
       - name: Configure Capacitor
         run: |
           cd capacitor-app
-          cat > capacitor.config.json << EOF
+          ST="${{ github.event.inputs.source_type }}"
+
+          if [ "$ST" = "url" ]; then
+            cat > capacitor.config.json << EOF
           {
             "appId": "${{ github.event.inputs.package_name }}",
             "appName": "${{ github.event.inputs.app_name }}",
@@ -55,9 +135,25 @@ jobs:
             "server": {
               "url": "${{ github.event.inputs.website_url }}",
               "cleartext": true
+            },
+            "android": {
+              "allowMixedContent": true
             }
           }
           EOF
+          else
+            cat > capacitor.config.json << EOF
+          {
+            "appId": "${{ github.event.inputs.package_name }}",
+            "appName": "${{ github.event.inputs.app_name }}",
+            "webDir": "www",
+            "android": {
+              "allowMixedContent": true
+            }
+          }
+          EOF
+          fi
+
           npx cap add android
           npx cap sync android
 
