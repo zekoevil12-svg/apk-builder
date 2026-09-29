@@ -27,14 +27,6 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Clean Gradle cache
-        run: |
-          rm -rf ~/.gradle/caches/jars-9 || true
-          rm -rf ~/.gradle/caches/modules-2/files-2.1/org.bouncycastle || true
-
       - name: Install Capacitor
         run: |
           mkdir capacitor-app
