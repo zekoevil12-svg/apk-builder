@@ -9,8 +9,9 @@ on:
         required: true
       website_url:
         required: true
-      icon_base64:
+      has_icon:
         required: false
+        default: 'no'
 
 jobs:
   build:
@@ -58,6 +59,16 @@ jobs:
           }
           EOF
           npx cap add android
+          npx cap sync android
+
+      - name: Apply custom icon
+        if: ${{ github.event.inputs.has_icon == 'yes' }}
+        run: |
+          cd capacitor-app
+          npm install @capacitor/assets
+          mkdir -p resources
+          cp ../icon-input.png resources/icon.png || true
+          npx @capacitor/assets generate --android || true
           npx cap sync android
 
       - name: Configure Gradle
