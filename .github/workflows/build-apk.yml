@@ -27,12 +27,20 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Clean Gradle cache
+        run: |
+          rm -rf ~/.gradle/caches/jars-9 || true
+          rm -rf ~/.gradle/caches/modules-2/files-2.1/org.bouncycastle || true
+
       - name: Install Capacitor
         run: |
           mkdir capacitor-app
           cd capacitor-app
           npm init -y
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install @capacitor/core@5 @capacitor/cli@5 @capacitor/android@5
           mkdir -p www
           cat > www/index.html << 'EOF'
           <!DOCTYPE html>
@@ -60,11 +68,19 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Configure Gradle
+        run: |
+          cd capacitor-app/android
+          echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8" >> gradle.properties
+          echo "org.gradle.daemon=false" >> gradle.properties
+          echo "android.useAndroidX=true" >> gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
+
       - name: Build APK
         run: |
           cd capacitor-app/android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
