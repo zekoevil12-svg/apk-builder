@@ -22,6 +22,15 @@ on:
       has_icon:
         required: false
         default: 'no'
+      permissions:
+        required: false
+        default: ''
+      server_url:
+        required: false
+        default: ''
+      enable_notifications:
+        required: false
+        default: 'no'
 
 jobs:
   build:
@@ -45,6 +54,9 @@ jobs:
           cd capacitor-app
           npm init -y
           npm install @capacitor/core@5 @capacitor/cli@5 @capacitor/android@5
+          if [ "${{ github.event.inputs.enable_notifications }}" = "yes" ]; then
+            npm install @capacitor/local-notifications@5
+          fi
           mkdir -p www
 
       - name: Prepare source files
@@ -53,39 +65,28 @@ jobs:
           ST="${{ github.event.inputs.source_type }}"
 
           if [ "$ST" = "url" ]; then
-            echo "=== URL mode ==="
             URL="${{ github.event.inputs.website_url }}"
             cat > www/index.html << EOF
           <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-            <title>App</title>
-            <style>
-              html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
-              iframe{border:none;width:100%;height:100%;display:block}
-            </style>
-          </head>
-          <body>
-            <iframe src="$URL" allowfullscreen allow="geolocation; microphone; camera"></iframe>
-          </body>
+          <html><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+          <title>App</title>
+          <style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
+          iframe{border:none;width:100%;height:100%;display:block}</style></head>
+          <body><iframe src="$URL" allowfullscreen allow="geolocation; microphone; camera"></iframe></body>
           </html>
           EOF
 
           elif [ "$ST" = "html" ]; then
-            echo "=== HTML mode ==="
             cp ../source-input.html www/index.html
 
           elif [ "$ST" = "zip" ]; then
-            echo "=== ZIP mode ==="
             unzip -O UTF-8 -o ../source-input.zip -d www_extract 2>&1 || \
             unzip -o ../source-input.zip -d www_extract 2>&1
 
             ENTRY_COUNT=$(ls -1 www_extract | wc -l)
             if [ "$ENTRY_COUNT" = "1" ] && [ -d "www_extract/$(ls -1 www_extract)" ]; then
               INNER=$(ls -1 www_extract)
-              echo "Single top folder detected: $INNER"
               mv www_extract/$INNER/* www/ 2>/dev/null || true
               mv www_extract/$INNER/.[!.]* www/ 2>/dev/null || true
             else
@@ -98,47 +99,66 @@ jobs:
               FOUND=$(find www -maxdepth 4 -name "index.html" -o -name "index.htm" | head -1)
               if [ -n "$FOUND" ]; then
                 DIR=$(dirname "$FOUND")
-                echo "Found index at $DIR, lifting..."
                 cp -r "$DIR"/* www/ 2>/dev/null || true
               fi
             fi
-
-            echo "=== www contents ==="
-            ls -la www/
-            echo "=== image files ==="
-            find www -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.gif" -o -iname "*.webp" -o -iname "*.svg" -o -iname "*.ico" \) | head -20
           fi
 
           if [ ! -f www/index.html ]; then
-            echo "❌ لا يوجد index.html!"
-            exit 1
+            echo "❌ لا يوجد index.html!"; exit 1
           fi
 
-          find www -type f | while read f; do
-            NEW=$(echo "$f" | sed 's/ /_/g')
-            if [ "$f" != "$NEW" ]; then
-              mv "$f" "$NEW" 2>/dev/null || true
-            fi
-          done
+          # حقن سكريبت الإشعارات
+          if [ "${{ github.event.inputs.enable_notifications }}" = "yes" ] && \
+             [ -n "${{ github.event.inputs.server_url }}" ]; then
+            cat >> www/index.html << 'EOF'
+          <script>
+          (async function(){
+            const API = "SERVER_URL_PLACEHOLDER";
+            const PKG = "PACKAGE_PLACEHOLDER";
+            let lastId = 0;
+            async function poll(){
+              try {
+                const r = await fetch(API + "/api/app/" + PKG + "/messages?since=" + lastId);
+                const j = await r.json();
+                if (j.ok && j.messages.length) {
+                  for (const m of j.messages) {
+                    const LN = window.Capacitor && window.Capacitor.Plugins
+                              && window.Capacitor.Plugins.LocalNotifications;
+                    if (LN) {
+                      await LN.schedule({ notifications: [{
+                        id: Math.floor(Date.now() % 2147483647),
+                        title: m.title, body: m.body
+                      }]});
+                    } else if (window.Notification && Notification.permission === "granted") {
+                      new Notification(m.title, { body: m.body });
+                    }
+                    lastId = m.id;
+                  }
+                }
+              } catch(e){}
+            }
+            setTimeout(poll, 5000);
+            setInterval(poll, 30000);
+          })();
+          </script>
+          EOF
+            sed -i "s|SERVER_URL_PLACEHOLDER|${{ github.event.inputs.server_url }}|g" www/index.html
+            sed -i "s|PACKAGE_PLACEHOLDER|${{ github.event.inputs.package_name }}|g" www/index.html
+          fi
 
       - name: Configure Capacitor
         run: |
           cd capacitor-app
           ST="${{ github.event.inputs.source_type }}"
-
           if [ "$ST" = "url" ]; then
             cat > capacitor.config.json << EOF
           {
             "appId": "${{ github.event.inputs.package_name }}",
             "appName": "${{ github.event.inputs.app_name }}",
             "webDir": "www",
-            "server": {
-              "url": "${{ github.event.inputs.website_url }}",
-              "cleartext": true
-            },
-            "android": {
-              "allowMixedContent": true
-            }
+            "server": { "url": "${{ github.event.inputs.website_url }}", "cleartext": true },
+            "android": { "allowMixedContent": true }
           }
           EOF
           else
@@ -147,15 +167,35 @@ jobs:
             "appId": "${{ github.event.inputs.package_name }}",
             "appName": "${{ github.event.inputs.app_name }}",
             "webDir": "www",
-            "android": {
-              "allowMixedContent": true
-            }
+            "android": { "allowMixedContent": true }
           }
           EOF
           fi
-
           npx cap add android
           npx cap sync android
+
+      - name: Add permissions to AndroidManifest
+        if: ${{ github.event.inputs.permissions != '' }}
+        run: |
+          cd capacitor-app/android/app/src/main
+          PERMS="${{ github.event.inputs.permissions }}"
+          MANIFEST="AndroidManifest.xml"
+          IFS=',' read -ra P <<< "$PERMS"
+          for p in "${P[@]}"; do
+            case "$p" in
+              camera)    AP="android.permission.CAMERA";;
+              location)  AP="android.permission.ACCESS_FINE_LOCATION";;
+              mic)       AP="android.permission.RECORD_AUDIO";;
+              storage)   AP="android.permission.READ_EXTERNAL_STORAGE";;
+              notif)     AP="android.permission.POST_NOTIFICATIONS";;
+              vibrate)   AP="android.permission.VIBRATE";;
+              contacts)  AP="android.permission.READ_CONTACTS";;
+              phone)     AP="android.permission.CALL_PHONE";;
+              *) continue;;
+            esac
+            sed -i "/<application/i \    <uses-permission android:name=\"$AP\" />" $MANIFEST
+          done
+          cat $MANIFEST
 
       - name: Apply custom icon
         if: ${{ github.event.inputs.has_icon == 'yes' }}
