@@ -73,19 +73,16 @@ jobs:
           <title>App</title>
           <style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
           iframe{border:none;width:100%;height:100%;display:block}</style></head>
-          <body><iframe src="$URL" allowfullscreen allow="geolocation; microphone; camera"></iframe></body>
+          <body><iframe src="$URL" allowfullscreen allow="geolocation;microphone;camera"></iframe></body>
           </html>
           EOF
-
           elif [ "$ST" = "html" ]; then
             cp ../source-input.html www/index.html
-
           elif [ "$ST" = "zip" ]; then
             unzip -O UTF-8 -o ../source-input.zip -d www_extract 2>&1 || \
             unzip -o ../source-input.zip -d www_extract 2>&1
-
-            ENTRY_COUNT=$(ls -1 www_extract | wc -l)
-            if [ "$ENTRY_COUNT" = "1" ] && [ -d "www_extract/$(ls -1 www_extract)" ]; then
+            ENTRY=$(ls -1 www_extract | wc -l)
+            if [ "$ENTRY" = "1" ] && [ -d "www_extract/$(ls -1 www_extract)" ]; then
               INNER=$(ls -1 www_extract)
               mv www_extract/$INNER/* www/ 2>/dev/null || true
               mv www_extract/$INNER/.[!.]* www/ 2>/dev/null || true
@@ -94,9 +91,8 @@ jobs:
               mv www_extract/.[!.]* www/ 2>/dev/null || true
             fi
             rm -rf www_extract
-
             if [ ! -f www/index.html ]; then
-              FOUND=$(find www -maxdepth 4 -name "index.html" -o -name "index.htm" | head -1)
+              FOUND=$(find www -maxdepth 4 -name "index.html" | head -1)
               if [ -n "$FOUND" ]; then
                 DIR=$(dirname "$FOUND")
                 cp -r "$DIR"/* www/ 2>/dev/null || true
@@ -105,46 +101,120 @@ jobs:
           fi
 
           if [ ! -f www/index.html ]; then
-            echo "❌ لا يوجد index.html!"; exit 1
+            echo "❌ لا يوجد index.html"; exit 1
           fi
 
-          # حقن سكريبت الإشعارات
+          # حقن سكريبت الإشعارات مع طلب الإذن
           if [ "${{ github.event.inputs.enable_notifications }}" = "yes" ] && \
              [ -n "${{ github.event.inputs.server_url }}" ]; then
             cat >> www/index.html << 'EOF'
           <script>
-          (async function(){
-            const API = "SERVER_URL_PLACEHOLDER";
-            const PKG = "PACKAGE_PLACEHOLDER";
-            let lastId = 0;
+          (function(){
+            var API = "__SERVER_URL__";
+            var PKG = "__PKG__";
+            var lastId = 0;
+            var permAsked = false;
+
+            async function requestNotificationPermission(){
+              try {
+                var LN = window.Capacitor && window.Capacitor.Plugins
+                         && window.Capacitor.Plugins.LocalNotifications;
+                if (!LN) return false;
+
+                // 1) اطبع الحالة الحالية
+                var status = await LN.checkPermissions();
+                console.log('[NOTIF] permission status:', JSON.stringify(status));
+
+                // 2) اطلب الإذن لو مش ممنوح
+                if (status.display !== 'granted') {
+                  var result = await LN.requestPermissions();
+                  console.log('[NOTIF] request result:', JSON.stringify(result));
+                  status = result;
+                }
+
+                // 3) أنشئ قناة إشعارات (مطلوب لأندرويد 8+)
+                try {
+                  await LN.createChannel({
+                    id: 'default',
+                    name: 'Default',
+                    description: 'Notifications',
+                    importance: 5,
+                    visibility: 1,
+                    vibration: true,
+                    sound: null
+                  });
+                  console.log('[NOTIF] channel created');
+                } catch(e) { console.log('[NOTIF] channel:', e); }
+
+                return status.display === 'granted';
+              } catch(e) {
+                console.log('[NOTIF] permission error:', e);
+                return false;
+              }
+            }
+
+            async function showNotification(title, body){
+              try {
+                var LN = window.Capacitor && window.Capacitor.Plugins
+                         && window.Capacitor.Plugins.LocalNotifications;
+                if (!LN) {
+                  // fallback: Web Notification API
+                  if (window.Notification && Notification.permission === 'granted') {
+                    new Notification(title, { body: body });
+                  }
+                  return;
+                }
+                await LN.schedule({
+                  notifications: [{
+                    id: Math.floor(Date.now() % 2147483647),
+                    title: title,
+                    body: body,
+                    channelId: 'default',
+                    smallIcon: 'ic_stat_icon_config_sample',
+                    schedule: { at: new Date(Date.now() + 500) },
+                    sound: null,
+                    attachments: null,
+                    actionTypeId: '',
+                    extra: null
+                  }]
+                });
+                console.log('[NOTIF] scheduled:', title);
+              } catch(e) {
+                console.log('[NOTIF] schedule error:', e);
+              }
+            }
+
             async function poll(){
               try {
-                const r = await fetch(API + "/api/app/" + PKG + "/messages?since=" + lastId);
-                const j = await r.json();
-                if (j.ok && j.messages.length) {
-                  for (const m of j.messages) {
-                    const LN = window.Capacitor && window.Capacitor.Plugins
-                              && window.Capacitor.Plugins.LocalNotifications;
-                    if (LN) {
-                      await LN.schedule({ notifications: [{
-                        id: Math.floor(Date.now() % 2147483647),
-                        title: m.title, body: m.body
-                      }]});
-                    } else if (window.Notification && Notification.permission === "granted") {
-                      new Notification(m.title, { body: m.body });
-                    }
+                var r = await fetch(API + "/api/app/" + PKG + "/messages?since=" + lastId);
+                var j = await r.json();
+                if (j.ok && j.messages && j.messages.length) {
+                  for (var i = 0; i < j.messages.length; i++) {
+                    var m = j.messages[i];
+                    await showNotification(m.title, m.body);
                     lastId = m.id;
                   }
                 }
-              } catch(e){}
+              } catch(e) { console.log('[NOTIF] poll error:', e); }
             }
-            setTimeout(poll, 5000);
-            setInterval(poll, 30000);
+
+            // اطلب الإذن أول ما يفتح التطبيق
+            async function init(){
+              await requestNotificationPermission();
+              setTimeout(poll, 3000);
+              setInterval(poll, 30000);
+            }
+
+            if (document.readyState === 'complete') {
+              init();
+            } else {
+              window.addEventListener('load', init);
+            }
           })();
           </script>
           EOF
-            sed -i "s|SERVER_URL_PLACEHOLDER|${{ github.event.inputs.server_url }}|g" www/index.html
-            sed -i "s|PACKAGE_PLACEHOLDER|${{ github.event.inputs.package_name }}|g" www/index.html
+            sed -i "s|__SERVER_URL__|${{ github.event.inputs.server_url }}|g" www/index.html
+            sed -i "s|__PKG__|${{ github.event.inputs.package_name }}|g" www/index.html
           fi
 
       - name: Configure Capacitor
@@ -153,28 +223,24 @@ jobs:
           ST="${{ github.event.inputs.source_type }}"
           if [ "$ST" = "url" ]; then
             cat > capacitor.config.json << EOF
-          {
-            "appId": "${{ github.event.inputs.package_name }}",
-            "appName": "${{ github.event.inputs.app_name }}",
-            "webDir": "www",
-            "server": { "url": "${{ github.event.inputs.website_url }}", "cleartext": true },
-            "android": { "allowMixedContent": true }
-          }
+          {"appId":"${{ github.event.inputs.package_name }}",
+           "appName":"${{ github.event.inputs.app_name }}",
+           "webDir":"www",
+           "server":{"url":"${{ github.event.inputs.website_url }}","cleartext":true},
+           "android":{"allowMixedContent":true}}
           EOF
           else
             cat > capacitor.config.json << EOF
-          {
-            "appId": "${{ github.event.inputs.package_name }}",
-            "appName": "${{ github.event.inputs.app_name }}",
-            "webDir": "www",
-            "android": { "allowMixedContent": true }
-          }
+          {"appId":"${{ github.event.inputs.package_name }}",
+           "appName":"${{ github.event.inputs.app_name }}",
+           "webDir":"www",
+           "android":{"allowMixedContent":true}}
           EOF
           fi
           npx cap add android
           npx cap sync android
 
-      - name: Add permissions to AndroidManifest
+      - name: Add permissions
         if: ${{ github.event.inputs.permissions != '' }}
         run: |
           cd capacitor-app/android/app/src/main
@@ -183,21 +249,22 @@ jobs:
           IFS=',' read -ra P <<< "$PERMS"
           for p in "${P[@]}"; do
             case "$p" in
-              camera)    AP="android.permission.CAMERA";;
-              location)  AP="android.permission.ACCESS_FINE_LOCATION";;
-              mic)       AP="android.permission.RECORD_AUDIO";;
-              storage)   AP="android.permission.READ_EXTERNAL_STORAGE";;
-              notif)     AP="android.permission.POST_NOTIFICATIONS";;
-              vibrate)   AP="android.permission.VIBRATE";;
-              contacts)  AP="android.permission.READ_CONTACTS";;
-              phone)     AP="android.permission.CALL_PHONE";;
+              camera)   AP="android.permission.CAMERA";;
+              location) AP="android.permission.ACCESS_FINE_LOCATION";;
+              mic)      AP="android.permission.RECORD_AUDIO";;
+              storage)  AP="android.permission.READ_EXTERNAL_STORAGE";;
+              notif)    AP="android.permission.POST_NOTIFICATIONS";;
+              vibrate)  AP="android.permission.VIBRATE";;
+              contacts) AP="android.permission.READ_CONTACTS";;
+              phone)    AP="android.permission.CALL_PHONE";;
               *) continue;;
             esac
             sed -i "/<application/i \    <uses-permission android:name=\"$AP\" />" $MANIFEST
           done
+          echo "=== AndroidManifest.xml ==="
           cat $MANIFEST
 
-      - name: Apply custom icon
+      - name: Apply icon
         if: ${{ github.event.inputs.has_icon == 'yes' }}
         run: |
           cd capacitor-app
@@ -207,7 +274,7 @@ jobs:
           npx @capacitor/assets generate --android || true
           npx cap sync android
 
-      - name: Configure Gradle
+      - name: Gradle config
         run: |
           cd capacitor-app/android
           echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8" >> gradle.properties
@@ -221,8 +288,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: capacitor-app/android/app/build/outputs/apk/debug/app-debug.apk
