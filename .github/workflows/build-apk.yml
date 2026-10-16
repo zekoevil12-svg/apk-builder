@@ -5,290 +5,119 @@ on:
     inputs:
       app_name:
         required: true
+        type: string
       package_name:
         required: true
+        type: string
       source_type:
+        description: 'url / html / zip / code'
         required: true
-        default: 'url'
+        type: string
       website_url:
         required: false
+        type: string
         default: 'https://example.com'
-      has_source_file:
+      source_url:
         required: false
-        default: 'no'
-      source_ext:
-        required: false
+        type: string
         default: ''
-      has_icon:
+      source_ext:
+        description: 'html / js / ts / tsx / zip ...'
         required: false
-        default: 'no'
+        type: string
+        default: ''
+      icon_url:
+        required: false
+        type: string
+        default: ''
       permissions:
         required: false
+        type: string
         default: ''
       server_url:
         required: false
+        type: string
         default: ''
       enable_notifications:
         required: false
+        type: string
         default: 'no'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          node-version: '18'
-
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: '17'
 
-      - name: Install Capacitor
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # نزّل المصدر من LinkDrop
+      - name: Download source
+        if: ${{ inputs.source_url != '' }}
         run: |
-          mkdir capacitor-app
-          cd capacitor-app
-          npm init -y
-          npm install @capacitor/core@5 @capacitor/cli@5 @capacitor/android@5
-          if [ "${{ github.event.inputs.enable_notifications }}" = "yes" ]; then
-            npm install @capacitor/local-notifications@5
-          fi
-          mkdir -p www
+          echo "⬇️ تحميل ${{ inputs.source_url }}"
+          curl -L --fail -o "source-input.${{ inputs.source_ext }}" "${{ inputs.source_url }}"
+          ls -lh source-input.${{ inputs.source_ext }}
 
-      - name: Prepare source files
+      # نزّل الأيقونة
+      - name: Download icon
+        if: ${{ inputs.icon_url != '' }}
         run: |
-          cd capacitor-app
-          ST="${{ github.event.inputs.source_type }}"
+          curl -L --fail -o icon-input.png "${{ inputs.icon_url }}"
+          ls -lh icon-input.png
 
-          if [ "$ST" = "url" ]; then
-            URL="${{ github.event.inputs.website_url }}"
-            cat > www/index.html << EOF
+      # لو الملف JS/TS/JSX/TSX — نغلّفه في HTML مؤقت
+      - name: Wrap code file in HTML
+        if: ${{ inputs.source_type == 'code' && inputs.source_ext != 'html' && inputs.source_ext != 'htm' }}
+        run: |
+          EXT="${{ inputs.source_ext }}"
+          case "$EXT" in
+            js|mjs|cjs) TAG="module" ;;
+            css) TAG="css" ;;
+            *) TAG="module" ;;
+          esac
+
+          if [ "$TAG" = "css" ]; then
+            cat > source-input.html <<HTML
           <!DOCTYPE html>
-          <html><head><meta charset="utf-8">
-          <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-          <title>App</title>
-          <style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden}
-          iframe{border:none;width:100%;height:100%;display:block}</style></head>
-          <body><iframe src="$URL" allowfullscreen allow="geolocation;microphone;camera"></iframe></body>
-          </html>
-          EOF
-          elif [ "$ST" = "html" ]; then
-            cp ../source-input.html www/index.html
-          elif [ "$ST" = "zip" ]; then
-            unzip -O UTF-8 -o ../source-input.zip -d www_extract 2>&1 || \
-            unzip -o ../source-input.zip -d www_extract 2>&1
-            ENTRY=$(ls -1 www_extract | wc -l)
-            if [ "$ENTRY" = "1" ] && [ -d "www_extract/$(ls -1 www_extract)" ]; then
-              INNER=$(ls -1 www_extract)
-              mv www_extract/$INNER/* www/ 2>/dev/null || true
-              mv www_extract/$INNER/.[!.]* www/ 2>/dev/null || true
-            else
-              mv www_extract/* www/ 2>/dev/null || true
-              mv www_extract/.[!.]* www/ 2>/dev/null || true
-            fi
-            rm -rf www_extract
-            if [ ! -f www/index.html ]; then
-              FOUND=$(find www -maxdepth 4 -name "index.html" | head -1)
-              if [ -n "$FOUND" ]; then
-                DIR=$(dirname "$FOUND")
-                cp -r "$DIR"/* www/ 2>/dev/null || true
-              fi
-            fi
-          fi
-
-          if [ ! -f www/index.html ]; then
-            echo "❌ لا يوجد index.html"; exit 1
-          fi
-
-          # حقن سكريبت الإشعارات مع طلب الإذن
-          if [ "${{ github.event.inputs.enable_notifications }}" = "yes" ] && \
-             [ -n "${{ github.event.inputs.server_url }}" ]; then
-            cat >> www/index.html << 'EOF'
-          <script>
-          (function(){
-            var API = "__SERVER_URL__";
-            var PKG = "__PKG__";
-            var lastId = 0;
-            var permAsked = false;
-
-            async function requestNotificationPermission(){
-              try {
-                var LN = window.Capacitor && window.Capacitor.Plugins
-                         && window.Capacitor.Plugins.LocalNotifications;
-                if (!LN) return false;
-
-                // 1) اطبع الحالة الحالية
-                var status = await LN.checkPermissions();
-                console.log('[NOTIF] permission status:', JSON.stringify(status));
-
-                // 2) اطلب الإذن لو مش ممنوح
-                if (status.display !== 'granted') {
-                  var result = await LN.requestPermissions();
-                  console.log('[NOTIF] request result:', JSON.stringify(result));
-                  status = result;
-                }
-
-                // 3) أنشئ قناة إشعارات (مطلوب لأندرويد 8+)
-                try {
-                  await LN.createChannel({
-                    id: 'default',
-                    name: 'Default',
-                    description: 'Notifications',
-                    importance: 5,
-                    visibility: 1,
-                    vibration: true,
-                    sound: null
-                  });
-                  console.log('[NOTIF] channel created');
-                } catch(e) { console.log('[NOTIF] channel:', e); }
-
-                return status.display === 'granted';
-              } catch(e) {
-                console.log('[NOTIF] permission error:', e);
-                return false;
-              }
-            }
-
-            async function showNotification(title, body){
-              try {
-                var LN = window.Capacitor && window.Capacitor.Plugins
-                         && window.Capacitor.Plugins.LocalNotifications;
-                if (!LN) {
-                  // fallback: Web Notification API
-                  if (window.Notification && Notification.permission === 'granted') {
-                    new Notification(title, { body: body });
-                  }
-                  return;
-                }
-                await LN.schedule({
-                  notifications: [{
-                    id: Math.floor(Date.now() % 2147483647),
-                    title: title,
-                    body: body,
-                    channelId: 'default',
-                    smallIcon: 'ic_stat_icon_config_sample',
-                    schedule: { at: new Date(Date.now() + 500) },
-                    sound: null,
-                    attachments: null,
-                    actionTypeId: '',
-                    extra: null
-                  }]
-                });
-                console.log('[NOTIF] scheduled:', title);
-              } catch(e) {
-                console.log('[NOTIF] schedule error:', e);
-              }
-            }
-
-            async function poll(){
-              try {
-                var r = await fetch(API + "/api/app/" + PKG + "/messages?since=" + lastId);
-                var j = await r.json();
-                if (j.ok && j.messages && j.messages.length) {
-                  for (var i = 0; i < j.messages.length; i++) {
-                    var m = j.messages[i];
-                    await showNotification(m.title, m.body);
-                    lastId = m.id;
-                  }
-                }
-              } catch(e) { console.log('[NOTIF] poll error:', e); }
-            }
-
-            // اطلب الإذن أول ما يفتح التطبيق
-            async function init(){
-              await requestNotificationPermission();
-              setTimeout(poll, 3000);
-              setInterval(poll, 30000);
-            }
-
-            if (document.readyState === 'complete') {
-              init();
-            } else {
-              window.addEventListener('load', init);
-            }
-          })();
-          </script>
-          EOF
-            sed -i "s|__SERVER_URL__|${{ github.event.inputs.server_url }}|g" www/index.html
-            sed -i "s|__PKG__|${{ github.event.inputs.package_name }}|g" www/index.html
-          fi
-
-      - name: Configure Capacitor
-        run: |
-          cd capacitor-app
-          ST="${{ github.event.inputs.source_type }}"
-          if [ "$ST" = "url" ]; then
-            cat > capacitor.config.json << EOF
-          {"appId":"${{ github.event.inputs.package_name }}",
-           "appName":"${{ github.event.inputs.app_name }}",
-           "webDir":"www",
-           "server":{"url":"${{ github.event.inputs.website_url }}","cleartext":true},
-           "android":{"allowMixedContent":true}}
-          EOF
+          <html><head><meta charset="utf-8"><title>${{ inputs.app_name }}</title>
+          <link rel="stylesheet" href="source-input.$EXT"></head>
+          <body><div id="app"></div></body></html>
+          HTML
+            cp "source-input.$EXT" "app.css"
           else
-            cat > capacitor.config.json << EOF
-          {"appId":"${{ github.event.inputs.package_name }}",
-           "appName":"${{ github.event.inputs.app_name }}",
-           "webDir":"www",
-           "android":{"allowMixedContent":true}}
-          EOF
+            cat > source-input.html <<HTML
+          <!DOCTYPE html>
+          <html><head><meta charset="utf-8"><title>${{ inputs.app_name }}</title></head>
+          <body><div id="app"></div>
+          <script type="$TAG" src="source-input.$EXT"></script>
+          </body></html>
+          HTML
           fi
-          npx cap add android
-          npx cap sync android
 
-      - name: Add permissions
-        if: ${{ github.event.inputs.permissions != '' }}
+      - name: Prepare project
         run: |
-          cd capacitor-app/android/app/src/main
-          PERMS="${{ github.event.inputs.permissions }}"
-          MANIFEST="AndroidManifest.xml"
-          IFS=',' read -ra P <<< "$PERMS"
-          for p in "${P[@]}"; do
-            case "$p" in
-              camera)   AP="android.permission.CAMERA";;
-              location) AP="android.permission.ACCESS_FINE_LOCATION";;
-              mic)      AP="android.permission.RECORD_AUDIO";;
-              storage)  AP="android.permission.READ_EXTERNAL_STORAGE";;
-              notif)    AP="android.permission.POST_NOTIFICATIONS";;
-              vibrate)  AP="android.permission.VIBRATE";;
-              contacts) AP="android.permission.READ_CONTACTS";;
-              phone)    AP="android.permission.CALL_PHONE";;
-              *) continue;;
-            esac
-            sed -i "/<application/i \    <uses-permission android:name=\"$AP\" />" $MANIFEST
-          done
-          echo "=== AndroidManifest.xml ==="
-          cat $MANIFEST
-
-      - name: Apply icon
-        if: ${{ github.event.inputs.has_icon == 'yes' }}
-        run: |
-          cd capacitor-app
-          npm install @capacitor/assets
-          mkdir -p resources
-          cp ../icon-input.png resources/icon.png || true
-          npx @capacitor/assets generate --android || true
-          npx cap sync android
-
-      - name: Gradle config
-        run: |
-          cd capacitor-app/android
-          echo "org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8" >> gradle.properties
-          echo "org.gradle.daemon=false" >> gradle.properties
-          echo "android.useAndroidX=true" >> gradle.properties
-          echo "android.enableJetifier=true" >> gradle.properties
+          chmod +x ./scripts/*.sh || true
+          bash ./scripts/prepare.sh
 
       - name: Build APK
         run: |
-          cd capacitor-app/android
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          cd android-app
+          ./gradlew assembleDebug
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: capacitor-app/android/app/build/outputs/apk/debug/app-debug.apk
+          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
