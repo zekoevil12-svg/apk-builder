@@ -49,20 +49,16 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      # ===== إعداد Android SDK يدوياً =====
+      # ===== إعداد Android SDK =====
       - name: Setup Android SDK
         run: |
           set -e
-          echo "📦 تحميل cmdline-tools..."
           mkdir -p $HOME/android-sdk/cmdline-tools
           cd $HOME/android-sdk/cmdline-tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
@@ -71,85 +67,267 @@ jobs:
           rm cmdline.zip
 
           export ANDROID_HOME=$HOME/android-sdk
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
 
-          echo "🔑 قبول التراخيص..."
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-
-          echo "📥 تثبيت الحزم..."
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "cmdline-tools;latest"
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
 
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-          echo "✅ تم تثبيت Android SDK"
-
-      - name: Verify SDK
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la $ANDROID_HOME
-          sdkmanager --version
-
-      # نزّل المصدر من LinkDrop
+      # ===== نزّل المصدر =====
       - name: Download source
         if: ${{ inputs.source_url != '' }}
         run: |
-          echo "⬇️ تحميل ${{ inputs.source_url }}"
-          curl -L --fail -o "source-input.${{ inputs.source_ext }}" "${{ inputs.source_url }}"
-          ls -lh source-input.${{ inputs.source_ext }}
+          mkdir -p /tmp/src
+          curl -L --fail -o "/tmp/src/source.${{ inputs.source_ext }}" "${{ inputs.source_url }}"
+          ls -lh /tmp/src/
 
-      # نزّل الأيقونة
       - name: Download icon
         if: ${{ inputs.icon_url != '' }}
         run: |
-          curl -L --fail -o icon-input.png "${{ inputs.icon_url }}"
-          ls -lh icon-input.png
+          curl -L --fail -o /tmp/icon.png "${{ inputs.icon_url }}" || true
+          ls -lh /tmp/icon.png || true
 
-      # لو الملف JS/TS/JSX/TSX — نغلّفه في HTML
-      - name: Wrap code file in HTML
-        if: ${{ inputs.source_type == 'code' && inputs.source_ext != 'html' && inputs.source_ext != 'htm' }}
+      # ===== ابنِ مشروع أندرويد من الصفر =====
+      - name: Create Android project
+        env:
+          APP_NAME: ${{ inputs.app_name }}
+          PKG_NAME: ${{ inputs.package_name }}
+          SRC_TYPE: ${{ inputs.source_type }}
+          SRC_EXT: ${{ inputs.source_ext }}
+          WEBSITE: ${{ inputs.website_url }}
+          PERMS: ${{ inputs.permissions }}
         run: |
-          EXT="${{ inputs.source_ext }}"
-          case "$EXT" in
-            js|mjs|cjs) TAG="module" ;;
-            css) TAG="css" ;;
-            *) TAG="module" ;;
-          esac
+          set -e
+          PROJECT=/tmp/app
+          mkdir -p $PROJECT/app/src/main/java/com/example/app
+          mkdir -p $PROJECT/app/src/main/res/values
+          mkdir -p $PROJECT/app/src/main/res/mipmap-hdpi
+          mkdir -p $PROJECT/app/src/main/assets
+          mkdir -p $PROJECT/gradle/wrapper
 
-          if [ "$TAG" = "css" ]; then
-            cp "source-input.$EXT" "app.css"
-            cat > source-input.html <<HTML
-          <!DOCTYPE html>
-          <html><head><meta charset="utf-8"><title>${{ inputs.app_name }}</title>
-          <link rel="stylesheet" href="app.css"></head>
-          <body><div id="app"></div></body></html>
-          HTML
-          else
-            cat > source-input.html <<HTML
-          <!DOCTYPE html>
-          <html><head><meta charset="utf-8"><title>${{ inputs.app_name }}</title></head>
-          <body><div id="app"></div>
-          <script type="$TAG" src="source-input.$EXT"></script>
-          </body></html>
-          HTML
+          # ===== settings.gradle =====
+          cat > $PROJECT/settings.gradle <<'EOF'
+          rootProject.name = "MyApp"
+          include ':app'
+          EOF
+
+          # ===== build.gradle (root) =====
+          cat > $PROJECT/build.gradle <<'EOF'
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.4'
+              }
+          }
+          allprojects { repositories { google(); mavenCentral() } }
+          EOF
+
+          # ===== app/build.gradle =====
+          cat > $PROJECT/app/build.gradle <<EOF
+          plugins { id 'com.android.application' }
+          android {
+              namespace '$PKG_NAME'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "$PKG_NAME"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes {
+                  release { minifyEnabled false }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'androidx.webkit:webkit:1.9.0'
+          }
+          EOF
+
+          # ===== AndroidManifest.xml =====
+          PERMS_XML=""
+          if [ -n "$PERMS" ]; then
+            IFS=',' read -ra PARRS <<< "$PERMS"
+            for p in "${PARRS[@]}"; do
+              case "$p" in
+                camera)    PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.CAMERA\"/>" ;;
+                location)  PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/><uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>" ;;
+                mic)       PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>" ;;
+                storage)   PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/><uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>" ;;
+                notif)     PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>" ;;
+                vibrate)   PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.VIBRATE\"/>" ;;
+                contacts)  PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.READ_CONTACTS\"/>" ;;
+                phone)     PERMS_XML="$PERMS_XML<uses-permission android:name=\"android.permission.CALL_PHONE\"/>" ;;
+              esac
+            done
           fi
 
-      - name: Prepare project
-        run: |
-          chmod +x ./scripts/*.sh || true
-          bash ./scripts/prepare.sh
+          cat > $PROJECT/app/src/main/AndroidManifest.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              $PERMS_XML
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="$APP_NAME"
+                  android:usesCleartextTraffic="true"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # ===== MainActivity.java =====
+          cat > $PROJECT/app/src/main/java/com/example/app/MainActivity.java <<EOF
+          package $PKG_NAME;
+
+          import android.annotation.SuppressLint;
+          import android.os.Bundle;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.webkit.PermissionRequest;
+          import android.webkit.WebChromeClient;
+          import androidx.appcompat.app.AppCompatActivity;
+
+          public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+
+              @SuppressLint("SetJavaScriptEnabled")
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  setContentView(webView);
+
+                  WebSettings s = webView.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setAllowContentAccess(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest request) {
+                          runOnUiThread(() -> request.grant(request.getResources()));
+                      }
+                  });
+
+                  String url = "$WEBSITE";
+                  if ("$SRC_TYPE".equals("url")) {
+                      webView.loadUrl(url);
+                  } else {
+                      webView.loadUrl("file:///android_asset/index.html");
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView.canGoBack()) webView.goBack();
+                  else super.onBackPressed();
+              }
+          }
+          EOF
+
+          # ===== styles.xml =====
+          cat > $PROJECT/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar"/>
+          </resources>
+          EOF
+
+          # ===== استخرج المصدر في assets =====
+          if [ -f "/tmp/src/source.$SRC_EXT" ]; then
+            if [ "$SRC_EXT" = "zip" ]; then
+              cd /tmp/src
+              unzip -q source.zip -d extracted
+              if [ -d extracted/*/ ]; then
+                # لو فيه فولدر جوه الـ zip
+                INNER=$(ls -d extracted/*/ | head -1)
+                cp -r "$INNER"* $PROJECT/app/src/main/assets/ 2>/dev/null || true
+              fi
+              cp -r extracted/* $PROJECT/app/src/main/assets/ 2>/dev/null || true
+            else
+              cp /tmp/src/source.$SRC_EXT $PROJECT/app/src/main/assets/index.$SRC_EXT
+              if [ "$SRC_EXT" != "html" ] && [ "$SRC_EXT" != "htm" ]; then
+                cat > $PROJECT/app/src/main/assets/index.html <<HTML
+          <!DOCTYPE html>
+          <html><head><meta charset="utf-8"><title>$APP_NAME</title></head>
+          <body><div id="app"></div>
+          <script src="index.$SRC_EXT"></script>
+          </body></html>
+          HTML
+              fi
+            fi
+          fi
+
+          # ===== الأيقونة =====
+          if [ -f "/tmp/icon.png" ]; then
+            for dpi in mipmap-hdpi mipmap-mdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
+              mkdir -p $PROJECT/app/src/main/res/$dpi
+              cp /tmp/icon.png $PROJECT/app/src/main/res/$dpi/ic_launcher.png
+            done
+          else
+            # أيقونة افتراضية 1×1 شفافة
+            mkdir -p $PROJECT/app/src/main/res/mipmap-hdpi
+            printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82' > $PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png
+          fi
+
+          # ===== gradle wrapper =====
+          cat > $PROJECT/gradle/wrapper/gradle-wrapper.properties <<'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+
+          # نزّل gradle-wrapper.jar
+          curl -L -o $PROJECT/gradle/wrapper/gradle-wrapper.jar \
+            https://github.com/gradle/gradle/raw/v8.2.0/gradle/wrapper/gradle-wrapper.jar
+
+          # سكريبت gradlew
+          cat > $PROJECT/gradlew <<'EOF'
+          #!/bin/sh
+          exec java -classpath "$(dirname "$0")/gradle/wrapper/gradle-wrapper.jar" \
+              org.gradle.wrapper.GradleWrapperMain "$@"
+          EOF
+          chmod +x $PROJECT/gradlew
+
+          # ===== local.properties =====
+          echo "sdk.dir=$ANDROID_HOME" > $PROJECT/local.properties
+
+          echo "✅ تم إنشاء المشروع"
 
       - name: Build APK
         run: |
-          cd android-app
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          cd /tmp/app
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: android-app/app/build/outputs/apk/debug/app-debug.apk
+          path: /tmp/app/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
