@@ -58,8 +58,39 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # ===== إعداد Android SDK يدوياً =====
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          set -e
+          echo "📦 تحميل cmdline-tools..."
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
+          unzip -q cmdline.zip
+          mv cmdline-tools latest 2>/dev/null || mv cmdline latest
+          rm cmdline.zip
+
+          export ANDROID_HOME=$HOME/android-sdk
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+
+          echo "🔑 قبول التراخيص..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+          echo "📥 تثبيت الحزم..."
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "cmdline-tools;latest"
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+
+          echo "✅ تم تثبيت Android SDK"
+
+      - name: Verify SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la $ANDROID_HOME
+          sdkmanager --version
 
       # نزّل المصدر من LinkDrop
       - name: Download source
@@ -76,7 +107,7 @@ jobs:
           curl -L --fail -o icon-input.png "${{ inputs.icon_url }}"
           ls -lh icon-input.png
 
-      # لو الملف JS/TS/JSX/TSX — نغلّفه في HTML مؤقت
+      # لو الملف JS/TS/JSX/TSX — نغلّفه في HTML
       - name: Wrap code file in HTML
         if: ${{ inputs.source_type == 'code' && inputs.source_ext != 'html' && inputs.source_ext != 'htm' }}
         run: |
@@ -88,13 +119,13 @@ jobs:
           esac
 
           if [ "$TAG" = "css" ]; then
+            cp "source-input.$EXT" "app.css"
             cat > source-input.html <<HTML
           <!DOCTYPE html>
           <html><head><meta charset="utf-8"><title>${{ inputs.app_name }}</title>
-          <link rel="stylesheet" href="source-input.$EXT"></head>
+          <link rel="stylesheet" href="app.css"></head>
           <body><div id="app"></div></body></html>
           HTML
-            cp "source-input.$EXT" "app.css"
           else
             cat > source-input.html <<HTML
           <!DOCTYPE html>
@@ -113,7 +144,8 @@ jobs:
       - name: Build APK
         run: |
           cd android-app
-          ./gradlew assembleDebug
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
