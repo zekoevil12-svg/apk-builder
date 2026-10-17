@@ -166,7 +166,6 @@ jobs:
           </paths>
           EOF
 
-          # 🌟 الطريقة المبتكرة: تجميع الصلاحيات في ملف ثم حذف المكرر بـ sort -u
           echo "android.permission.INTERNET" > /tmp/perms.txt
           echo "android.permission.ACCESS_NETWORK_STATE" >> /tmp/perms.txt
           echo "android.permission.READ_EXTERNAL_STORAGE" >> /tmp/perms.txt
@@ -188,10 +187,8 @@ jobs:
             done
           fi
 
-          # تحويل القائمة لصيغة XML نظيفة بدون أي تكرار
           sort -u /tmp/perms.txt | sed 's/^/    <uses-permission android:name="/; s/$/"\/>/' > /tmp/perms.xml
 
-          # إنشاء ملف المانيفست النهائي
           cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -282,7 +279,6 @@ jobs:
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  // منع تصوير الشاشة
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
 
                   webView = new WebView(this);
@@ -304,7 +300,15 @@ jobs:
                   CookieManager.getInstance().setAcceptCookie(true);
                   CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
-                  webView.setWebViewClient(new WebViewClient());
+                  // 🌟 اعتراض ملفات الـ Blob بمجرد إن الموقع يفتح
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public void onPageFinished(WebView view, String url) {
+                          super.onPageFinished(view, url);
+                          injectBlobInterceptor();
+                      }
+                  });
+
                   webView.setWebChromeClient(new WebChromeClient() {
                       @Override
                       public void onPermissionRequest(final PermissionRequest request) {
@@ -342,6 +346,22 @@ jobs:
 
                   if ("__SRC__".equals("url")) webView.loadUrl("__URL__");
                   else webView.loadUrl("file:///android_asset/index.html");
+              }
+
+              // 🌟 الدالة اللي بتحقن الكود في الموقع عشان يمسك الـ Blob
+              private void injectBlobInterceptor() {
+                  String js = "(function() {" +
+                      "if (window._blobInterceptorInstalled) return;" +
+                      "window._blobInterceptorInstalled = true;" +
+                      "window._blobCache = {};" +
+                      "var originalCreate = URL.createObjectURL;" +
+                      "URL.createObjectURL = function(blob) {" +
+                      "  var url = originalCreate.call(URL, blob);" +
+                      "  window._blobCache[url] = blob;" +
+                      "  return url;" +
+                      "};" +
+                      "})();";
+                  webView.evaluateJavascript(js, null);
               }
 
               private void requestPermissions() {
@@ -383,9 +403,21 @@ jobs:
                   } catch (Exception e) { toast("❌ فشل التحميل: " + e.getMessage()); }
               }
 
+              // 🌟 تم تعديل الدالة دي عشان تقرا الـ Blob من الكاش بدل النت
               private void handleBlobUrl(String blobUrl, String mimeType) {
                   final String mt = (mimeType == null || mimeType.isEmpty()) ? "application/octet-stream" : mimeType;
-                  String js = "(function() { try { var xhr = new XMLHttpRequest(); xhr.open('GET', '" + blobUrl + "', true); xhr.responseType = 'blob'; xhr.onload = function(e) { if (this.status === 200) { var blob = this.response; var reader = new FileReader(); reader.onloadend = function() { var b64 = reader.result.split(',')[1]; Android.saveBase64(b64, '" + mt + "'); }; reader.readAsDataURL(blob); } else { Android.saveError('HTTP ' + this.status); } }; xhr.onerror = function() { Android.saveError('Network error'); }; xhr.send(); } catch(err) { Android.saveError(err.message); } })();";
+                  String js = "(function() {" +
+                      "try {" +
+                      "var blob = window._blobCache && window._blobCache['" + blobUrl + "'];" +
+                      "if (!blob) { Android.saveError('انتهت صلاحية الملف، جرب تحمله تاني'); return; }" +
+                      "var reader = new FileReader();" +
+                      "reader.onloadend = function() {" +
+                      "  var b64 = reader.result.split(',')[1];" +
+                      "  Android.saveBase64(b64, '" + mt + "');" +
+                      "};" +
+                      "reader.readAsDataURL(blob);" +
+                      "} catch(err) { Android.saveError(err.message); }" +
+                      "})();";
                   webView.evaluateJavascript(js, null);
                   toast("📥 جاري التحميل...");
               }
@@ -496,7 +528,7 @@ jobs:
                   }
                   @JavascriptInterface
                   public void saveError(String msg) { 
-                      toast("❌ خطأ التحميل (JS): " + msg); 
+                      toast("❌ خطأ التحميل: " + msg); 
                   }
               }
 
