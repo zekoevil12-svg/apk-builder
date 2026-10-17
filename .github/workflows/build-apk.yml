@@ -112,7 +112,6 @@ jobs:
 
           printf 'rootProject.name = "MyApp"\ninclude ":app"\n' > "$PROJECT/settings.gradle"
 
-          # ✅ تم إصلاح build.gradle الرئيسي (شيلنا Kotlin)
           cat > "$PROJECT/build.gradle" << 'EOF'
           buildscript {
               repositories { google(); mavenCentral() }
@@ -146,7 +145,6 @@ jobs:
           }
           EOF
 
-          # ✅ إعدادات Gradle
           printf 'android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
 
@@ -530,7 +528,22 @@ jobs:
       - name: Build APK
         run: |
           cd /tmp/app
-          gradle assembleDebug --no-daemon --stacktrace
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo ""
+            echo "=========================================="
+            echo "❌ فشل البناء! (Gradle Error):"
+            echo "=========================================="
+            grep -B 2 -A 20 -i "What went wrong" build.log || true
+            echo ""
+            echo "=========================================="
+            echo "📄 تفاصيل الخطأ في الكود (Java/XML):"
+            echo "=========================================="
+            grep -B 2 -A 5 -i "error:" build.log || true
+            echo "=========================================="
+            exit 1
+          fi
 
       - name: Find APK
         if: always()
