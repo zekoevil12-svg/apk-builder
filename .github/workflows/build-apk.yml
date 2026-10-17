@@ -112,7 +112,7 @@ jobs:
 
           printf 'rootProject.name = "MyApp"\ninclude ":app"\n' > "$PROJECT/settings.gradle"
 
-          # 🌟 إجبار كل المهام (جافا وكوتلن) على استخدام إصدار 17
+          # ✅ تم إصلاح build.gradle الرئيسي (شيلنا Kotlin)
           cat > "$PROJECT/build.gradle" << 'EOF'
           buildscript {
               repositories { google(); mavenCentral() }
@@ -120,13 +120,6 @@ jobs:
           }
           allprojects {
               repositories { google(); mavenCentral() }
-              tasks.withType(JavaCompile) {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
-              }
-              tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-                  kotlinOptions { jvmTarget = "17" }
-              }
           }
           EOF
 
@@ -146,9 +139,6 @@ jobs:
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-              kotlinOptions {
-                  jvmTarget = "17"
-              }
           }
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -156,6 +146,7 @@ jobs:
           }
           EOF
 
+          # ✅ إعدادات Gradle
           printf 'android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
 
