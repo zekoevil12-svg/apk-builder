@@ -112,23 +112,20 @@ jobs:
 
           printf 'rootProject.name = "MyApp"\ninclude ":app"\n' > "$PROJECT/settings.gradle"
 
-          # 🌟 إجبار كل المشاريع الفرعية (subprojects) على استخدام Java 17
+          # 🌟 إجبار كل المهام (جافا وكوتلن) على استخدام إصدار 17
           cat > "$PROJECT/build.gradle" << 'EOF'
           buildscript {
               repositories { google(); mavenCentral() }
               dependencies { classpath 'com.android.tools.build:gradle:8.1.4' }
           }
-          allprojects { repositories { google(); mavenCentral() } }
-          subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          compileOptions {
-                              sourceCompatibility JavaVersion.VERSION_17
-                              targetCompatibility JavaVersion.VERSION_17
-                          }
-                      }
-                  }
+          allprojects {
+              repositories { google(); mavenCentral() }
+              tasks.withType(JavaCompile) {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+                  kotlinOptions { jvmTarget = "17" }
               }
           }
           EOF
@@ -149,6 +146,9 @@ jobs:
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
           }
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
@@ -156,9 +156,7 @@ jobs:
           }
           EOF
 
-          # 🌟 إجبار Gradle على استخدام Java 17
-          printf 'android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m\nandroid.compileOptions.sourceCompatibility=17\nandroid.compileOptions.targetCompatibility=17\n' > "$PROJECT/gradle.properties"
-          
+          printf 'android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
 
           cat > "$PROJECT/app/src/main/res/xml/file_paths.xml" << 'EOF'
@@ -282,11 +280,7 @@ jobs:
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  // منع تصوير الشاشة
-                  getWindow().setFlags(
-                      WindowManager.LayoutParams.FLAG_SECURE,
-                      WindowManager.LayoutParams.FLAG_SECURE
-                  );
+                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
 
                   webView = new WebView(this);
                   setContentView(webView);
@@ -312,25 +306,18 @@ jobs:
                       public void onPermissionRequest(final PermissionRequest request) {
                           runOnUiThread(new Runnable() {
                               @Override
-                              public void run() {
-                                  request.grant(request.getResources());
-                              }
+                              public void run() { request.grant(request.getResources()); }
                           });
                       }
 
                       @Override
                       public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                          if (mFilePathCallback != null) {
-                              mFilePathCallback.onReceiveValue(null);
-                          }
+                          if (mFilePathCallback != null) mFilePathCallback.onReceiveValue(null);
                           mFilePathCallback = filePathCallback;
                           Intent intent = fileChooserParams.createIntent();
                           intent.addCategory(Intent.CATEGORY_OPENABLE);
-                          try {
-                              startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE);
-                          } catch (ActivityNotFoundException e) {
-                              mFilePathCallback = null;
-                              return false;
+                          try { startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE); } catch (ActivityNotFoundException e) {
+                              mFilePathCallback = null; return false;
                           }
                           return true;
                       }
@@ -340,26 +327,17 @@ jobs:
 
                   webView.setDownloadListener(new DownloadListener() {
                       @Override
-                      public void onDownloadStart(String url, String userAgent,
-                                                  String contentDisposition, String mimeType,
-                                                  long contentLength) {
+                      public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
                           if (url == null) return;
                           String u = url.trim();
-                          if (u.startsWith("blob:")) {
-                              handleBlobUrl(u, mimeType);
-                          } else if (u.startsWith("data:")) {
-                              handleDataUrl(u, mimeType);
-                          } else {
-                              handleHttpDownload(u, userAgent, contentDisposition, mimeType);
-                          }
+                          if (u.startsWith("blob:")) handleBlobUrl(u, mimeType);
+                          else if (u.startsWith("data:")) handleDataUrl(u, mimeType);
+                          else handleHttpDownload(u, userAgent, contentDisposition, mimeType);
                       }
                   });
 
-                  if ("__SRC__".equals("url")) {
-                      webView.loadUrl("__URL__");
-                  } else {
-                      webView.loadUrl("file:///android_asset/index.html");
-                  }
+                  if ("__SRC__".equals("url")) webView.loadUrl("__URL__");
+                  else webView.loadUrl("file:///android_asset/index.html");
               }
 
               @Override
@@ -369,14 +347,11 @@ jobs:
                       Uri[] results = null;
                       if (resultCode == Activity.RESULT_OK && data != null) {
                           String dataString = data.getDataString();
-                          if (dataString != null) {
-                              results = new Uri[]{Uri.parse(dataString)};
-                          } else if (data.getClipData() != null) {
+                          if (dataString != null) results = new Uri[]{Uri.parse(dataString)};
+                          else if (data.getClipData() != null) {
                               int count = data.getClipData().getItemCount();
                               results = new Uri[count];
-                              for (int i = 0; i < count; i++) {
-                                  results[i] = data.getClipData().getItemAt(i).getUri();
-                              }
+                              for (int i = 0; i < count; i++) results[i] = data.getClipData().getItemAt(i).getUri();
                           }
                       }
                       mFilePathCallback.onReceiveValue(results);
@@ -388,9 +363,7 @@ jobs:
 
               private void createNotificationChannel() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      NotificationChannel ch = new NotificationChannel(
-                          CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_HIGH);
-                      ch.setDescription("إشعارات التحميل");
+                      NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_HIGH);
                       NotificationManager nm = getSystemService(NotificationManager.class);
                       if (nm != null) nm.createNotificationChannel(ch);
                   }
@@ -410,37 +383,13 @@ jobs:
                       request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                       request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
                       DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                      if (dm != null) {
-                          dm.enqueue(request);
-                          toast("📥 جاري التحميل: " + fileName);
-                      }
-                  } catch (Exception e) {
-                      toast("❌ فشل التحميل: " + e.getMessage());
-                  }
+                      if (dm != null) { dm.enqueue(request); toast("📥 جاري التحميل: " + fileName); }
+                  } catch (Exception e) { toast("❌ فشل التحميل: " + e.getMessage()); }
               }
 
               private void handleBlobUrl(String blobUrl, String mimeType) {
                   final String mt = (mimeType == null || mimeType.isEmpty()) ? "application/octet-stream" : mimeType;
-                  String js = "(function() {" +
-                      "try {" +
-                      "var xhr = new XMLHttpRequest();" +
-                      "xhr.open('GET', '" + blobUrl + "', true);" +
-                      "xhr.responseType = 'blob';" +
-                      "xhr.onload = function(e) {" +
-                      "  if (this.status === 200) {" +
-                      "    var blob = this.response;" +
-                      "    var reader = new FileReader();" +
-                      "    reader.onloadend = function() {" +
-                      "      var b64 = reader.result.split(',')[1];" +
-                      "      Android.saveBase64(b64, '" + mt + "');" +
-                      "    };" +
-                      "    reader.readAsDataURL(blob);" +
-                      "  } else { Android.saveError('HTTP ' + this.status); }" +
-                      "};" +
-                      "xhr.onerror = function() { Android.saveError('Network error'); };" +
-                      "xhr.send();" +
-                      "} catch(err) { Android.saveError(err.message); }" +
-                      "})();";
+                  String js = "(function() { try { var xhr = new XMLHttpRequest(); xhr.open('GET', '" + blobUrl + "', true); xhr.responseType = 'blob'; xhr.onload = function(e) { if (this.status === 200) { var blob = this.response; var reader = new FileReader(); reader.onloadend = function() { var b64 = reader.result.split(',')[1]; Android.saveBase64(b64, '" + mt + "'); }; reader.readAsDataURL(blob); } else { Android.saveError('HTTP ' + this.status); } }; xhr.onerror = function() { Android.saveError('Network error'); }; xhr.send(); } catch(err) { Android.saveError(err.message); } })();";
                   webView.evaluateJavascript(js, null);
                   toast("📥 جاري التحميل...");
               }
@@ -455,16 +404,9 @@ jobs:
                       String mime = meta.split(";")[0];
                       if (mime.isEmpty()) mime = mimeType;
                       if (mime == null || mime.isEmpty()) mime = "application/octet-stream";
-                      byte[] data;
-                      if (isBase64) {
-                          data = Base64.decode(payload, Base64.DEFAULT);
-                      } else {
-                          data = Uri.decode(payload).getBytes("UTF-8");
-                      }
+                      byte[] data = isBase64 ? Base64.decode(payload, Base64.DEFAULT) : Uri.decode(payload).getBytes("UTF-8");
                       saveBytes(data, mime);
-                  } catch (Exception e) {
-                      toast("❌ فشل التحميل: " + e.getMessage());
-                  }
+                  } catch (Exception e) { toast("❌ فشل التحميل: " + e.getMessage()); }
               }
 
               private String saveBytes(byte[] data, String mimeType) {
@@ -483,17 +425,13 @@ jobs:
                           Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
                           if (uri == null) throw new Exception("Could not create file");
                           OutputStream os = getContentResolver().openOutputStream(uri);
-                          os.write(data);
-                          os.close();
-                          savedUri = uri;
+                          os.write(data); os.close(); savedUri = uri;
                       } else {
                           File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                           if (!dir.exists()) dir.mkdirs();
                           File out = new File(dir, fileName);
                           FileOutputStream fos = new FileOutputStream(out);
-                          fos.write(data);
-                          fos.close();
-                          savedFile = out;
+                          fos.write(data); fos.close(); savedFile = out;
                       }
 
                       showDownloadNotification(fileName, savedUri, savedFile, mimeType);
@@ -501,30 +439,20 @@ jobs:
                       toast("✅ تم التحميل\n📂 " + path);
                       openFile(savedUri, savedFile, mimeType, fileName);
                       return fileName;
-                  } catch (Exception e) {
-                      toast("❌ فشل الحفظ: " + e.getMessage());
-                      return null;
-                  }
+                  } catch (Exception e) { toast("❌ فشل الحفظ: " + e.getMessage()); return null; }
               }
 
               private void showDownloadNotification(String fileName, Uri savedUri, File savedFile, String mimeType) {
                   try {
                       NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                       if (nm == null) return;
-
                       Intent openIntent = buildOpenIntent(savedUri, savedFile, mimeType, fileName);
                       PendingIntent pi = null;
-                      if (openIntent != null) {
-                          pi = PendingIntent.getActivity(this, (int) System.currentTimeMillis(),
-                              openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                      }
-
+                      if (openIntent != null) pi = PendingIntent.getActivity(this, (int) System.currentTimeMillis(), openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                       NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
                           .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                          .setContentTitle("✅ تم التحميل")
-                          .setContentText(fileName + " — اضغط للفتح")
-                          .setAutoCancel(true)
-                          .setPriority(NotificationCompat.PRIORITY_HIGH);
+                          .setContentTitle("✅ تم التحميل").setContentText(fileName + " — اضغط للفتح")
+                          .setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_HIGH);
                       if (pi != null) b.setContentIntent(pi);
                       nm.notify(NOTIF_ID, b.build());
                   } catch (Exception e) {}
@@ -532,55 +460,38 @@ jobs:
 
               private Intent buildOpenIntent(Uri savedUri, File savedFile, String mimeType, String fileName) {
                   try {
-                      Uri uri;
-                      if (savedUri != null) {
-                          uri = savedUri;
-                      } else if (savedFile != null) {
-                          uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", savedFile);
-                      } else {
-                          return null;
-                      }
+                      Uri uri = savedUri != null ? savedUri : (savedFile != null ? FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", savedFile) : null);
+                      if (uri == null) return null;
                       Intent intent = new Intent(Intent.ACTION_VIEW);
                       intent.setDataAndType(uri, mimeType);
                       intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                       intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                       return intent;
-                  } catch (Exception e) {
-                      return null;
-                  }
+                  } catch (Exception e) { return null; }
               }
 
               private void openFile(Uri savedUri, File savedFile, String mimeType, String fileName) {
                   try {
                       Intent intent = buildOpenIntent(savedUri, savedFile, mimeType, fileName);
-                      if (intent == null) return;
-                      startActivity(Intent.createChooser(intent, "فتح الملف بـ..."));
+                      if (intent != null) startActivity(Intent.createChooser(intent, "فتح الملف بـ..."));
                   } catch (Exception e) {}
               }
 
               private void toast(final String msg) {
                   runOnUiThread(new Runnable() {
                       @Override
-                      public void run() {
-                          Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show();
-                      }
+                      public void run() { Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show(); }
                   });
               }
 
               public class WebAppInterface {
                   @JavascriptInterface
                   public void saveBase64(String base64Data, String mimeType) {
-                      try {
-                          byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
-                          saveBytes(data, mimeType);
-                      } catch (Exception e) {
-                          toast("❌ فشل الحفظ: " + e.getMessage());
-                      }
+                      try { saveBytes(Base64.decode(base64Data, Base64.DEFAULT), mimeType); } 
+                      catch (Exception e) { toast("❌ فشل الحفظ: " + e.getMessage()); }
                   }
                   @JavascriptInterface
-                  public void saveError(String msg) {
-                      toast("❌ خطأ التحميل: " + msg);
-                  }
+                  public void saveError(String msg) { toast("❌ خطأ التحميل: " + msg); }
               }
 
               @Override
