@@ -350,7 +350,6 @@ jobs:
           print("Project created at", PROJECT)
           PYEOF
           echo "Python script written"
-          ls -la /tmp/create.py
 
       - name: Create Android project
         env:
@@ -365,14 +364,22 @@ jobs:
       - name: Build APK
         run: |
           cd /tmp/app
-          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tail -100
+          gradle assembleDebug --no-daemon --stacktrace
         env:
           GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+      - name: Find APK
+        run: |
+          echo "🔍 البحث عن APK..."
+          find /tmp/app -name "*.apk" -type f
+          echo "📂 محتوى outputs:"
+          ls -laR /tmp/app/app/build/outputs/ 2>/dev/null || echo "مفيش مجلد outputs"
 
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: /tmp/app/app/build/outputs/apk/debug/app-debug.apk
+          path: /tmp/app/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
           retention-days: 7
