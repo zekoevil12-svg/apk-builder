@@ -159,6 +159,7 @@ jobs:
           </paths>
           EOF
 
+          # 🌟 تم إصلاح التكرار هنا: شيلنا الصلاحيات اللي بتتكرر من الـ loop
           PERMS_XML=""
           if [ -n "$PERMS" ]; then
             IFS=',' read -ra PARRS <<< "$PERMS"
@@ -166,9 +167,9 @@ jobs:
               p=$(echo "$p" | tr -d ' ')
               case "$p" in
                 camera)    PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.CAMERA\"/>"$'\n' ;;
-                location)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>"$'\n' ;;
+                location)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>"$'\n'"    <uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>"$'\n' ;;
                 mic)       PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>"$'\n' ;;
-                storage)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>"$'\n' ;;
+                storage)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>"$'\n'"    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>"$'\n' ;;
                 notif)     PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>"$'\n' ;;
                 vibrate)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.VIBRATE\"/>"$'\n' ;;
                 contacts)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_CONTACTS\"/>"$'\n' ;;
@@ -182,9 +183,7 @@ jobs:
             echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
             echo '    <uses-permission android:name="android.permission.INTERNET"/>'
             echo '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>'
-            echo '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
-            echo '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>'
-            echo '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>'
+            # شيلنا POST_NOTIFICATIONS و READ_EXTERNAL_STORAGE من هنا عشان ميتكرروش
             if [ -n "$PERMS_XML" ]; then
               printf '%s' "$PERMS_XML"
             fi
