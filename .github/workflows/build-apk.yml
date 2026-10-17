@@ -50,6 +50,9 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -63,7 +66,6 @@ jobs:
 
       - name: Setup Android SDK
         run: |
-          set -e
           mkdir -p $HOME/android-sdk/cmdline-tools
           cd $HOME/android-sdk/cmdline-tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
@@ -78,7 +80,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "✅ Android SDK جاهز"
+          echo "SDK Ready"
 
       - name: Download source
         if: ${{ inputs.source_url != '' }}
@@ -93,6 +95,263 @@ jobs:
           curl -L --fail -o /tmp/icon.png "${{ inputs.icon_url }}" || true
           ls -lh /tmp/icon.png || true
 
+      - name: Write Python script
+        run: |
+          cat > /tmp/create.py << 'PYEOF'
+          import os, pathlib, shutil, zipfile, base64
+
+          PKG = os.environ["PKG_NAME"]
+          APP = os.environ["APP_NAME"]
+          SRC = os.environ["SRC_TYPE"]
+          EXT = os.environ["SRC_EXT"]
+          URL = os.environ["WEBSITE"]
+          PERMS = os.environ.get("PERMS", "")
+          ANDROID_HOME = os.environ["ANDROID_HOME"]
+
+          PROJECT = pathlib.Path("/tmp/app")
+          PKG_PATH = PKG.replace(".", "/")
+          (PROJECT / "app/src/main/java" / PKG_PATH).mkdir(parents=True, exist_ok=True)
+          (PROJECT / "app/src/main/res/values").mkdir(parents=True, exist_ok=True)
+          (PROJECT / "app/src/main/res/mipmap-hdpi").mkdir(parents=True, exist_ok=True)
+          (PROJECT / "app/src/main/assets").mkdir(parents=True, exist_ok=True)
+
+          (PROJECT / "settings.gradle").write_text("rootProject.name = \"MyApp\"\ninclude ':app'\n")
+
+          (PROJECT / "build.gradle").write_text(
+              "buildscript {\n"
+              "    repositories { google(); mavenCentral() }\n"
+              "    dependencies { classpath 'com.android.tools.build:gradle:8.1.4' }\n"
+              "}\n"
+              "allprojects { repositories { google(); mavenCentral() } }\n"
+          )
+
+          app_build = """plugins { id 'com.android.application' }
+          android {
+              namespace '__PKG__'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "__PKG__"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes { release { minifyEnabled false } }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+          }
+          """.replace("__PKG__", PKG)
+          (PROJECT / "app/build.gradle").write_text(app_build)
+
+          (PROJECT / "gradle.properties").write_text(
+              "android.useAndroidX=true\n"
+              "android.enableJetifier=true\n"
+              "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8\n"
+          )
+
+          (PROJECT / "local.properties").write_text("sdk.dir=%s\n" % ANDROID_HOME)
+
+          perms_map = {
+              "camera": "android.permission.CAMERA",
+              "location": "android.permission.ACCESS_FINE_LOCATION",
+              "mic": "android.permission.RECORD_AUDIO",
+              "storage": "android.permission.READ_EXTERNAL_STORAGE",
+              "notif": "android.permission.POST_NOTIFICATIONS",
+              "vibrate": "android.permission.VIBRATE",
+              "contacts": "android.permission.READ_CONTACTS",
+              "phone": "android.permission.CALL_PHONE",
+          }
+          perms_xml = ""
+          if PERMS:
+              for p in PERMS.split(","):
+                  p = p.strip()
+                  if p in perms_map:
+                      perms_xml += '    <uses-permission android:name="%s"/>\n' % perms_map[p]
+                      if p == "location":
+                          perms_xml += '    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>\n'
+                      if p == "storage":
+                          perms_xml += '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>\n'
+
+          manifest = """<?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
+          __PERMS__    <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="__APP__"
+                  android:usesCleartextTraffic="true"
+                  android:requestLegacyExternalStorage="true"
+                  android:theme="@style/AppTheme">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          """.replace("__PERMS__", perms_xml).replace("__APP__", APP)
+          (PROJECT / "app/src/main/AndroidManifest.xml").write_text(manifest)
+
+          java_code = '''package __PKG__;
+
+          import android.annotation.SuppressLint;
+          import android.app.DownloadManager;
+          import android.content.Context;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.webkit.CookieManager;
+          import android.webkit.DownloadListener;
+          import android.webkit.PermissionRequest;
+          import android.webkit.URLUtil;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import androidx.appcompat.app.AppCompatActivity;
+
+          public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+
+              @SuppressLint("SetJavaScriptEnabled")
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  setContentView(webView);
+
+                  WebSettings s = webView.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setAllowContentAccess(true);
+                  s.setAllowFileAccessFromFileURLs(true);
+                  s.setAllowUniversalAccessFromFileURLs(true);
+                  s.setMediaPlaybackRequiresUserGesture(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  CookieManager.getInstance().setAcceptCookie(true);
+                  CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest request) {
+                          runOnUiThread(new Runnable() {
+                              @Override
+                              public void run() {
+                                  request.grant(request.getResources());
+                              }
+                          });
+                      }
+                  });
+
+                  webView.setDownloadListener(new DownloadListener() {
+                      @Override
+                      public void onDownloadStart(String url, String userAgent,
+                                                  String contentDisposition, String mimeType,
+                                                  long contentLength) {
+                          try {
+                              DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                              request.setMimeType(mimeType);
+                              String cookies = CookieManager.getInstance().getCookie(url);
+                              request.addRequestHeader("cookie", cookies);
+                              request.addRequestHeader("User-Agent", userAgent);
+                              request.setDescription("Downloading");
+                              String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                              request.setTitle(fileName);
+                              request.allowScanningByMediaScanner();
+                              request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                              request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                              DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                              if (dm != null) {
+                                  dm.enqueue(request);
+                                  Toast.makeText(getApplicationContext(), "Downloading: " + fileName, Toast.LENGTH_LONG).show();
+                              }
+                          } catch (Exception e) {
+                              Toast.makeText(getApplicationContext(), "Download failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                          }
+                      }
+                  });
+
+                  if ("__SRC__".equals("url")) {
+                      webView.loadUrl("__URL__");
+                  } else {
+                      webView.loadUrl("file:///android_asset/index.html");
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView.canGoBack()) webView.goBack();
+                  else super.onBackPressed();
+              }
+          }
+          '''.replace("__PKG__", PKG).replace("__SRC__", SRC).replace("__URL__", URL)
+          (PROJECT / "app/src/main/java" / PKG_PATH / "MainActivity.java").write_text(java_code)
+
+          (PROJECT / "app/src/main/res/values/styles.xml").write_text(
+              '<?xml version="1.0" encoding="utf-8"?>\n'
+              '<resources>\n'
+              '    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar"/>\n'
+              '</resources>\n'
+          )
+
+          src_file = pathlib.Path("/tmp/src/source.%s" % EXT)
+          assets = PROJECT / "app/src/main/assets"
+          if src_file.exists():
+              if EXT == "zip":
+                  import tempfile
+                  with tempfile.TemporaryDirectory() as tmpdir:
+                      with zipfile.ZipFile(src_file, "r") as z:
+                          z.extractall(tmpdir)
+                      tmp = pathlib.Path(tmpdir)
+                      items = list(tmp.iterdir())
+                      if len(items) == 1 and items[0].is_dir():
+                          src_root = items[0]
+                      else:
+                          src_root = tmp
+                      for item in src_root.iterdir():
+                          dest = assets / item.name
+                          if item.is_dir():
+                              shutil.copytree(item, dest, dirs_exist_ok=True)
+                          else:
+                              shutil.copy(item, dest)
+              else:
+                  shutil.copy(src_file, assets / ("index.%s" % EXT))
+                  if EXT not in ("html", "htm"):
+                      (assets / "index.html").write_text(
+                          '<!DOCTYPE html>\n<html>\n<head><meta charset="utf-8"><title>%s</title></head>\n'
+                          '<body><div id="app"></div>\n<script src="index.%s"></script>\n</body>\n</html>\n' % (APP, EXT)
+                      )
+
+          icon_src = pathlib.Path("/tmp/icon.png")
+          if icon_src.exists() and icon_src.stat().st_size > 0:
+              for dpi in ["mipmap-mdpi", "mipmap-hdpi", "mipmap-xhdpi", "mipmap-xxhdpi", "mipmap-xxxhdpi"]:
+                  dpi_dir = PROJECT / ("app/src/main/res/%s" % dpi)
+                  dpi_dir.mkdir(parents=True, exist_ok=True)
+                  shutil.copy(icon_src, dpi_dir / "ic_launcher.png")
+          else:
+              default_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+              (PROJECT / "app/src/main/res/mipmap-hdpi/ic_launcher.png").write_bytes(default_png)
+
+          print("Project created at", PROJECT)
+          PYEOF
+          echo "Python script written"
+          ls -la /tmp/create.py
+
       - name: Create Android project
         env:
           APP_NAME: ${{ inputs.app_name }}
@@ -101,260 +360,7 @@ jobs:
           SRC_EXT: ${{ inputs.source_ext }}
           WEBSITE: ${{ inputs.website_url }}
           PERMS: ${{ inputs.permissions }}
-        run: |
-          set -e
-          PROJECT=/tmp/app
-          PKG_PATH=$(echo "$PKG_NAME" | tr '.' '/')
-          echo "📦 PKG_PATH=$PKG_PATH"
-
-          mkdir -p "$PROJECT/app/src/main/java/$PKG_PATH"
-          mkdir -p $PROJECT/app/src/main/res/values
-          mkdir -p $PROJECT/app/src/main/res/xml
-          mkdir -p $PROJECT/app/src/main/res/mipmap-hdpi
-          mkdir -p $PROJECT/app/src/main/assets
-
-          cat > $PROJECT/settings.gradle <<'EOF'
-rootProject.name = "MyApp"
-include ':app'
-EOF
-
-          cat > $PROJECT/build.gradle <<'EOF'
-buildscript {
-    repositories { google(); mavenCentral() }
-    dependencies { classpath 'com.android.tools.build:gradle:8.1.4' }
-}
-allprojects { repositories { google(); mavenCentral() } }
-EOF
-
-          cat > $PROJECT/app/build.gradle <<EOF
-plugins { id 'com.android.application' }
-android {
-    namespace '$PKG_NAME'
-    compileSdk 34
-    defaultConfig {
-        applicationId "$PKG_NAME"
-        minSdk 21
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
-    }
-    buildTypes { release { minifyEnabled false } }
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-}
-dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-}
-EOF
-
-          cat > $PROJECT/gradle.properties <<'EOF'
-android.useAndroidX=true
-android.enableJetifier=true
-org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-EOF
-
-          echo "sdk.dir=$ANDROID_HOME" > $PROJECT/local.properties
-
-          # ---- الأذونات ----
-          PERMS_XML=""
-          if [ -n "$PERMS" ]; then
-            IFS=',' read -ra PARRS <<< "$PERMS"
-            for p in "${PARRS[@]}"; do
-              case "$p" in
-                camera)    PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.CAMERA\"/>"$'\n' ;;
-                location)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>"$'\n'"    <uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>"$'\n' ;;
-                mic)       PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>"$'\n' ;;
-                storage)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>"$'\n'"    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>"$'\n' ;;
-                notif)     PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>"$'\n' ;;
-                vibrate)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.VIBRATE\"/>"$'\n' ;;
-                contacts)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_CONTACTS\"/>"$'\n' ;;
-                phone)     PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.CALL_PHONE\"/>"$'\n' ;;
-              esac
-            done
-          fi
-
-          cat > $PROJECT/app/src/main/AndroidManifest.xml <<EOF
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
-${PERMS_XML}    <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="$APP_NAME"
-        android:usesCleartextTraffic="true"
-        android:requestLegacyExternalStorage="true"
-        android:theme="@style/AppTheme">
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-EOF
-
-          # ---- MainActivity.java مع دعم التحميل ----
-          cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" <<EOF
-package $PKG_NAME;
-
-import android.annotation.SuppressLint;
-import android.app.DownloadManager;
-import android.content.Context;
-import android.net.Uri;
-import android.os.Build;
-import android.os.Bundle;
-import android.os.Environment;
-import android.webkit.CookieManager;
-import android.webkit.DownloadListener;
-import android.webkit.PermissionRequest;
-import android.webkit.URLUtil;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
-import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
-
-public class MainActivity extends AppCompatActivity {
-    private WebView webView;
-
-    @SuppressLint("SetJavaScriptEnabled")
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        webView = new WebView(this);
-        setContentView(webView);
-
-        WebSettings s = webView.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setAllowFileAccess(true);
-        s.setAllowContentAccess(true);
-        s.setAllowFileAccessFromFileURLs(true);
-        s.setAllowUniversalAccessFromFileURLs(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        s.setLoadWithOverviewMode(true);
-        s.setUseWideViewPort(true);
-
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
-
-        webView.setWebViewClient(new WebViewClient());
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                runOnUiThread(() -> request.grant(request.getResources()));
-            }
-        });
-
-        // ✅ دعم التحميل جوا التطبيق
-        webView.setDownloadListener(new DownloadListener() {
-            @Override
-            public void onDownloadStart(String url, String userAgent,
-                                        String contentDisposition, String mimeType,
-                                        long contentLength) {
-                try {
-                    DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                    request.setMimeType(mimeType);
-                    String cookies = CookieManager.getInstance().getCookie(url);
-                    request.addRequestHeader("cookie", cookies);
-                    request.addRequestHeader("User-Agent", userAgent);
-                    request.setDescription("جاري التحميل...");
-                    String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-                    request.setTitle(fileName);
-                    request.allowScanningByMediaScanner();
-                    request.setNotificationVisibility(
-                        DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                    request.setDestinationInExternalPublicDir(
-                        Environment.DIRECTORY_DOWNLOADS, fileName);
-
-                    DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                    if (dm != null) {
-                        dm.enqueue(request);
-                        Toast.makeText(getApplicationContext(),
-                            "📥 جاري التحميل: " + fileName, Toast.LENGTH_LONG).show();
-                    }
-                } catch (Exception e) {
-                    Toast.makeText(getApplicationContext(),
-                        "❌ فشل التحميل: " + e.getMessage(), Toast.LENGTH_LONG).show();
-                }
-            }
-        });
-
-        if ("$SRC_TYPE".equals("url")) {
-            webView.loadUrl("$WEBSITE");
-        } else {
-            webView.loadUrl("file:///android_asset/index.html");
-        }
-    }
-
-    @Override
-    public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack();
-        else super.onBackPressed();
-    }
-}
-EOF
-
-          cat > $PROJECT/app/src/main/res/values/styles.xml <<'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar"/>
-</resources>
-EOF
-
-          # ---- استخراج المصدر ----
-          if [ -f "/tmp/src/source.$SRC_EXT" ]; then
-            if [ "$SRC_EXT" = "zip" ]; then
-              mkdir -p /tmp/extracted
-              cd /tmp/extracted
-              unzip -q "/tmp/src/source.zip"
-              if [ $(ls -1 | wc -l) -eq 1 ] && [ -d "$(ls -1)" ]; then
-                INNER=$(ls -1)
-                cp -r "$INNER"/* $PROJECT/app/src/main/assets/ 2>/dev/null || true
-              else
-                cp -r /tmp/extracted/* $PROJECT/app/src/main/assets/ 2>/dev/null || true
-              fi
-              echo "📦 محتوى assets:"
-              ls -la $PROJECT/app/src/main/assets/ | head -20
-            else
-              cp "/tmp/src/source.$SRC_EXT" "$PROJECT/app/src/main/assets/index.$SRC_EXT"
-              if [ "$SRC_EXT" != "html" ] && [ "$SRC_EXT" != "htm" ]; then
-                cat > $PROJECT/app/src/main/assets/index.html <<EOF
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>$APP_NAME</title></head>
-<body><div id="app"></div>
-<script src="index.$SRC_EXT"></script>
-</body>
-</html>
-EOF
-              fi
-            fi
-          fi
-
-          # ---- الأيقونة ----
-          if [ -f "/tmp/icon.png" ] && [ -s "/tmp/icon.png" ]; then
-            for dpi in mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi; do
-              mkdir -p $PROJECT/app/src/main/res/$dpi
-              cp /tmp/icon.png $PROJECT/app/src/main/res/$dpi/ic_launcher.png
-            done
-          else
-            B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-            echo "$B64" | base64 -d > $PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png
-          fi
-
-          echo "✅ تم إنشاء المشروع بنجاح"
+        run: python3 /tmp/create.py
 
       - name: Build APK
         run: |
