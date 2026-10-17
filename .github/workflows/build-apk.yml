@@ -223,7 +223,7 @@ jobs:
           </manifest>
           EOF
 
-          # 🌟 تجهيز الملفات وتشفيرها
+          # 🌟 الإصلاح: تجهيز الملفات وتشفيرها بشكل صحيح
           SRC_FILE="/tmp/src/source.$SRC_EXT"
           if [ -f "$SRC_FILE" ]; then
             mkdir -p /tmp/extracted
@@ -243,11 +243,16 @@ jobs:
               fi
             fi
 
-            # 🌟 التشفير: ضغط الملفات ثم تشفيرها بـ AES-256 وحذف الأصل
+            # 🌟 التشفير: بنضغط الملفات، ونشفرها في مجلد /tmp، وبعدين ننقل الملف المشفر بس للـ assets
             cd "$PROJECT/app/src/main/assets"
             zip -r /tmp/secure.zip ./* > /dev/null 2>&1 || true
-            openssl enc -aes-256-cbc -nosalt -K 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F -iv 0102030405060708090A0B0C0D0E0F10 -in /tmp/secure.zip -out "$PROJECT/app/src/main/assets/secure.bin"
+            openssl enc -aes-256-cbc -nosalt -K 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F -iv 0102030405060708090A0B0C0D0E0F10 -in /tmp/secure.zip -out /tmp/secure.bin
+            
+            # مسح الملفات الأصلية من الـ assets
             rm -rf "$PROJECT/app/src/main/assets"/*
+            
+            # نقل الملف المشفر بس للـ assets
+            mv /tmp/secure.bin "$PROJECT/app/src/main/assets/secure.bin"
             echo "🔒 تم تشفير ملفات الموقع بنجاح!"
           fi
 
@@ -425,7 +430,6 @@ jobs:
                   }
               }
 
-              // 🌟 دالة البحث عن ملف داخل فولدرات
               private File findFile(File dir, String fileName) {
                   if (dir == null || !dir.exists()) return null;
                   File[] files = dir.listFiles();
@@ -442,7 +446,6 @@ jobs:
                   return null;
               }
 
-              // 🌟 دالة فك التشفير (بترجع رسالة الخطأ لو حصل)
               private String decryptAndUnzip() {
                   try {
                       InputStream is = getAssets().open("secure.bin");
