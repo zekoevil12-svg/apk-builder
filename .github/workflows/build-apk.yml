@@ -41,6 +41,9 @@ on:
         type: string
         default: 'no'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -67,13 +70,10 @@ jobs:
           unzip -q cmdline.zip
           mv cmdline-tools latest 2>/dev/null || mv cmdline latest
           rm cmdline.zip
-
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
-
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
@@ -104,42 +104,28 @@ jobs:
         run: |
           set -e
           PROJECT=/tmp/app
-
-          # ✅ صلّح مسار الباكدج
           PKG_PATH=$(echo "$PKG_NAME" | tr '.' '/')
           echo "📦 PKG_PATH=$PKG_PATH"
 
           mkdir -p "$PROJECT/app/src/main/java/$PKG_PATH"
           mkdir -p $PROJECT/app/src/main/res/values
+          mkdir -p $PROJECT/app/src/main/res/xml
           mkdir -p $PROJECT/app/src/main/res/mipmap-hdpi
           mkdir -p $PROJECT/app/src/main/assets
 
-          # ---- settings.gradle ----
           cat > $PROJECT/settings.gradle <<'EOF'
 rootProject.name = "MyApp"
 include ':app'
 EOF
 
-          # ---- root build.gradle ----
           cat > $PROJECT/build.gradle <<'EOF'
 buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.1.4'
-    }
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.1.4' }
 }
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
+allprojects { repositories { google(); mavenCentral() } }
 EOF
 
-          # ---- app/build.gradle ----
           cat > $PROJECT/app/build.gradle <<EOF
 plugins { id 'com.android.application' }
 android {
@@ -152,9 +138,7 @@ android {
         versionCode 1
         versionName "1.0"
     }
-    buildTypes {
-        release { minifyEnabled false }
-    }
+    buildTypes { release { minifyEnabled false } }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -165,17 +149,15 @@ dependencies {
 }
 EOF
 
-          # ---- gradle.properties ----
           cat > $PROJECT/gradle.properties <<'EOF'
 android.useAndroidX=true
 android.enableJetifier=true
 org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
 EOF
 
-          # ---- local.properties ----
           echo "sdk.dir=$ANDROID_HOME" > $PROJECT/local.properties
 
-          # ---- AndroidManifest.xml ----
+          # ---- الأذونات ----
           PERMS_XML=""
           if [ -n "$PERMS" ]; then
             IFS=',' read -ra PARRS <<< "$PERMS"
@@ -197,12 +179,15 @@ EOF
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
 ${PERMS_XML}    <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="$APP_NAME"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        android:requestLegacyExternalStorage="true"
+        android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -216,17 +201,26 @@ ${PERMS_XML}    <application
 </manifest>
 EOF
 
-          # ---- MainActivity.java ----
+          # ---- MainActivity.java مع دعم التحميل ----
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" <<EOF
 package $PKG_NAME;
 
 import android.annotation.SuppressLint;
+import android.app.DownloadManager;
+import android.content.Context;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
 import android.webkit.PermissionRequest;
+import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 
 public class MainActivity extends AppCompatActivity {
@@ -244,14 +238,56 @@ public class MainActivity extends AppCompatActivity {
         s.setDomStorageEnabled(true);
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
+        s.setAllowFileAccessFromFileURLs(true);
+        s.setAllowUniversalAccessFromFileURLs(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setLoadWithOverviewMode(true);
+        s.setUseWideViewPort(true);
+
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
         webView.setWebViewClient(new WebViewClient());
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(final PermissionRequest request) {
                 runOnUiThread(() -> request.grant(request.getResources()));
+            }
+        });
+
+        // ✅ دعم التحميل جوا التطبيق
+        webView.setDownloadListener(new DownloadListener() {
+            @Override
+            public void onDownloadStart(String url, String userAgent,
+                                        String contentDisposition, String mimeType,
+                                        long contentLength) {
+                try {
+                    DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                    request.setMimeType(mimeType);
+                    String cookies = CookieManager.getInstance().getCookie(url);
+                    request.addRequestHeader("cookie", cookies);
+                    request.addRequestHeader("User-Agent", userAgent);
+                    request.setDescription("جاري التحميل...");
+                    String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                    request.setTitle(fileName);
+                    request.allowScanningByMediaScanner();
+                    request.setNotificationVisibility(
+                        DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                    request.setDestinationInExternalPublicDir(
+                        Environment.DIRECTORY_DOWNLOADS, fileName);
+
+                    DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                    if (dm != null) {
+                        dm.enqueue(request);
+                        Toast.makeText(getApplicationContext(),
+                            "📥 جاري التحميل: " + fileName, Toast.LENGTH_LONG).show();
+                    }
+                } catch (Exception e) {
+                    Toast.makeText(getApplicationContext(),
+                        "❌ فشل التحميل: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
             }
         });
 
@@ -270,7 +306,6 @@ public class MainActivity extends AppCompatActivity {
 }
 EOF
 
-          # ---- styles.xml ----
           cat > $PROJECT/app/src/main/res/values/styles.xml <<'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
@@ -278,13 +313,12 @@ EOF
 </resources>
 EOF
 
-          # ---- استخراج المصدر في assets ----
+          # ---- استخراج المصدر ----
           if [ -f "/tmp/src/source.$SRC_EXT" ]; then
             if [ "$SRC_EXT" = "zip" ]; then
               mkdir -p /tmp/extracted
               cd /tmp/extracted
               unzip -q "/tmp/src/source.zip"
-              # لو فيه فولدر واحد جوه، انقل محتواه
               if [ $(ls -1 | wc -l) -eq 1 ] && [ -d "$(ls -1)" ]; then
                 INNER=$(ls -1)
                 cp -r "$INNER"/* $PROJECT/app/src/main/assets/ 2>/dev/null || true
@@ -294,7 +328,6 @@ EOF
               echo "📦 محتوى assets:"
               ls -la $PROJECT/app/src/main/assets/ | head -20
             else
-              # ملف مفرد
               cp "/tmp/src/source.$SRC_EXT" "$PROJECT/app/src/main/assets/index.$SRC_EXT"
               if [ "$SRC_EXT" != "html" ] && [ "$SRC_EXT" != "htm" ]; then
                 cat > $PROJECT/app/src/main/assets/index.html <<EOF
@@ -317,14 +350,11 @@ EOF
               cp /tmp/icon.png $PROJECT/app/src/main/res/$dpi/ic_launcher.png
             done
           else
-            # أيقونة افتراضية 1x1 PNG
             B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
             echo "$B64" | base64 -d > $PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png
           fi
 
           echo "✅ تم إنشاء المشروع بنجاح"
-          echo "📂 الملفات:"
-          find $PROJECT -type f | head -30
 
       - name: Build APK
         run: |
