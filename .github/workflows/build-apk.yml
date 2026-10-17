@@ -122,7 +122,6 @@ jobs:
           }
           EOF
 
-          # 🌟 التعديل هنا: جبرنا كل نسخ الكوتلن تستخدم إصدار موحد، وقفلنا الـ Jetifier
           cat > "$PROJECT/app/build.gradle" << EOF
           plugins { id 'com.android.application' }
           android {
@@ -153,9 +152,7 @@ jobs:
           }
           EOF
 
-          # 🌟 التعديل هنا: غيرنا enableJetifier لـ false
           printf 'android.useAndroidX=true\nandroid.enableJetifier=false\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
-          
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
 
           cat > "$PROJECT/app/src/main/res/xml/file_paths.xml" << 'EOF'
@@ -192,6 +189,8 @@ jobs:
             echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
             echo '    <uses-permission android:name="android.permission.INTERNET"/>'
             echo '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>'
+            echo '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>'
+            echo '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
             if [ -n "$PERMS_XML" ]; then
               printf '%s' "$PERMS_XML"
             fi
@@ -227,6 +226,7 @@ jobs:
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" << 'JAVAEOF'
           package __PKG__;
 
+          import android.Manifest;
           import android.annotation.SuppressLint;
           import android.app.Activity;
           import android.app.DownloadManager;
@@ -237,6 +237,7 @@ jobs:
           import android.content.ContentValues;
           import android.content.Context;
           import android.content.Intent;
+          import android.content.pm.PackageManager;
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
@@ -257,7 +258,9 @@ jobs:
           import android.webkit.WebViewClient;
           import android.widget.Toast;
           import androidx.appcompat.app.AppCompatActivity;
+          import androidx.core.app.ActivityCompat;
           import androidx.core.app.NotificationCompat;
+          import androidx.core.content.ContextCompat;
           import androidx.core.content.FileProvider;
 
           import java.io.File;
@@ -270,18 +273,21 @@ jobs:
               private static final int NOTIF_ID = 1001;
               private ValueCallback<Uri[]> mFilePathCallback;
               private static final int FILE_CHOOSER_RESULT_CODE = 1;
+              private static final int STORAGE_PERMISSION_CODE = 100;
 
               @SuppressLint("SetJavaScriptEnabled")
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
+                  // منع تصوير الشاشة
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
 
                   webView = new WebView(this);
                   setContentView(webView);
 
                   createNotificationChannel();
+                  requestStoragePermission();
 
                   WebSettings s = webView.getSettings();
                   s.setJavaScriptEnabled(true);
@@ -336,24 +342,11 @@ jobs:
                   else webView.loadUrl("file:///android_asset/index.html");
               }
 
-              @Override
-              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-                  if (requestCode == FILE_CHOOSER_RESULT_CODE) {
-                      if (mFilePathCallback == null) return;
-                      Uri[] results = null;
-                      if (resultCode == Activity.RESULT_OK && data != null) {
-                          String dataString = data.getDataString();
-                          if (dataString != null) results = new Uri[]{Uri.parse(dataString)};
-                          else if (data.getClipData() != null) {
-                              int count = data.getClipData().getItemCount();
-                              results = new Uri[count];
-                              for (int i = 0; i < count; i++) results[i] = data.getClipData().getItemAt(i).getUri();
-                          }
+              private void requestStoragePermission() {
+                  if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 29) {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION_CODE);
                       }
-                      mFilePathCallback.onReceiveValue(results);
-                      mFilePathCallback = null;
-                  } else {
-                      super.onActivityResult(requestCode, resultCode, data);
                   }
               }
 
@@ -419,7 +412,7 @@ jobs:
                           values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
                           values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
                           Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                          if (uri == null) throw new Exception("Could not create file");
+                          if (uri == null) throw new Exception("Could not create file in MediaStore");
                           OutputStream os = getContentResolver().openOutputStream(uri);
                           os.write(data); os.close(); savedUri = uri;
                       } else {
@@ -435,7 +428,10 @@ jobs:
                       toast("✅ تم التحميل\n📂 " + path);
                       openFile(savedUri, savedFile, mimeType, fileName);
                       return fileName;
-                  } catch (Exception e) { toast("❌ فشل الحفظ: " + e.getMessage()); return null; }
+                  } catch (Exception e) {
+                      toast("❌ فشل الحفظ: " + e.toString());
+                      return null;
+                  }
               }
 
               private void showDownloadNotification(String fileName, Uri savedUri, File savedFile, String mimeType) {
@@ -470,7 +466,7 @@ jobs:
                   try {
                       Intent intent = buildOpenIntent(savedUri, savedFile, mimeType, fileName);
                       if (intent != null) startActivity(Intent.createChooser(intent, "فتح الملف بـ..."));
-                  } catch (Exception e) {}
+                  } catch (Exception e) { toast("مفيش تطبيق يفتح النوع ده"); }
               }
 
               private void toast(final String msg) {
@@ -483,11 +479,18 @@ jobs:
               public class WebAppInterface {
                   @JavascriptInterface
                   public void saveBase64(String base64Data, String mimeType) {
-                      try { saveBytes(Base64.decode(base64Data, Base64.DEFAULT), mimeType); } 
-                      catch (Exception e) { toast("❌ فشل الحفظ: " + e.getMessage()); }
+                      try { 
+                          byte[] data = Base64.decode(base64Data, Base64.DEFAULT); 
+                          saveBytes(data, mimeType); 
+                      } 
+                      catch (Exception e) { 
+                          toast("❌ فشل الحفظ (base64): " + e.toString()); 
+                      }
                   }
                   @JavascriptInterface
-                  public void saveError(String msg) { toast("❌ خطأ التحميل: " + msg); }
+                  public void saveError(String msg) { 
+                      toast("❌ خطأ التحميل (JS): " + msg); 
+                  }
               }
 
               @Override
