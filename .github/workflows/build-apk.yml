@@ -122,6 +122,7 @@ jobs:
           }
           EOF
 
+          # 🌟 التعديل هنا: جبرنا كل نسخ الكوتلن تستخدم إصدار موحد، وقفلنا الـ Jetifier
           cat > "$PROJECT/app/build.gradle" << EOF
           plugins { id 'com.android.application' }
           android {
@@ -139,13 +140,22 @@ jobs:
                   targetCompatibility JavaVersion.VERSION_17
               }
           }
+          configurations.all {
+              resolutionStrategy.eachDependency { details ->
+                  if (details.requested.group == 'org.jetbrains.kotlin' && details.requested.name.startsWith('kotlin-stdlib')) {
+                      details.useVersion '1.8.22'
+                  }
+              }
+          }
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.core:core:1.12.0'
           }
           EOF
 
-          printf 'android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
+          # 🌟 التعديل هنا: غيرنا enableJetifier لـ false
+          printf 'android.useAndroidX=true\nandroid.enableJetifier=false\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
+          
           printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
 
           cat > "$PROJECT/app/src/main/res/xml/file_paths.xml" << 'EOF'
@@ -159,7 +169,6 @@ jobs:
           </paths>
           EOF
 
-          # 🌟 تم إصلاح التكرار هنا: شيلنا الصلاحيات اللي بتتكرر من الـ loop
           PERMS_XML=""
           if [ -n "$PERMS" ]; then
             IFS=',' read -ra PARRS <<< "$PERMS"
@@ -183,7 +192,6 @@ jobs:
             echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
             echo '    <uses-permission android:name="android.permission.INTERNET"/>'
             echo '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>'
-            # شيلنا POST_NOTIFICATIONS و READ_EXTERNAL_STORAGE من هنا عشان ميتكرروش
             if [ -n "$PERMS_XML" ]; then
               printf '%s' "$PERMS_XML"
             fi
