@@ -245,7 +245,7 @@ jobs:
 
             # 🌟 التشفير: ضغط الملفات ثم تشفيرها بـ AES-256 وحذف الأصل
             cd "$PROJECT/app/src/main/assets"
-            zip -r /tmp/secure.zip . > /dev/null
+            zip -r /tmp/secure.zip ./* > /dev/null 2>&1 || true
             openssl enc -aes-256-cbc -nosalt -K 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F -iv 0102030405060708090A0B0C0D0E0F10 -in /tmp/secure.zip -out "$PROJECT/app/src/main/assets/secure.bin"
             rm -rf "$PROJECT/app/src/main/assets"/*
             echo "🔒 تم تشفير ملفات الموقع بنجاح!"
@@ -410,18 +410,40 @@ jobs:
                   if ("__SRC__".equals("url")) {
                       webView.loadUrl("__URL__");
                   } else {
-                      boolean extracted = decryptAndUnzip();
-                      File indexFile = new File(getFilesDir(), "app_web/index.html");
-                      if (extracted && indexFile.exists()) {
-                          webView.loadUrl("file://" + indexFile.getAbsolutePath());
+                      String err = decryptAndUnzip();
+                      if (err != null) {
+                          toast("❌ فشل فك التشفير: " + err);
                       } else {
-                          toast("❌ فشل فك تشفير الملفات!");
+                          // البحث عن index.html في أي مكان داخل المجلد
+                          File indexFile = findFile(new File(getFilesDir(), "app_web"), "index.html");
+                          if (indexFile != null) {
+                              webView.loadUrl("file://" + indexFile.getAbsolutePath());
+                          } else {
+                              toast("❌ لم يتم العثور على index.html");
+                          }
                       }
                   }
               }
 
-              // 🌟 دالة فك التشفير
-              private boolean decryptAndUnzip() {
+              // 🌟 دالة البحث عن ملف داخل فولدرات
+              private File findFile(File dir, String fileName) {
+                  if (dir == null || !dir.exists()) return null;
+                  File[] files = dir.listFiles();
+                  if (files != null) {
+                      for (File file : files) {
+                          if (file.isDirectory()) {
+                              File found = findFile(file, fileName);
+                              if (found != null) return found;
+                          } else if (file.getName().equalsIgnoreCase(fileName)) {
+                              return file;
+                          }
+                      }
+                  }
+                  return null;
+              }
+
+              // 🌟 دالة فك التشفير (بترجع رسالة الخطأ لو حصل)
+              private String decryptAndUnzip() {
                   try {
                       InputStream is = getAssets().open("secure.bin");
                       ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -458,10 +480,10 @@ jobs:
                           }
                       }
                       zis.close();
-                      return true;
+                      return null; // نجاح
                   } catch (Exception e) {
                       e.printStackTrace();
-                      return false;
+                      return e.toString(); // إرجاع الخطأ
                   }
               }
 
