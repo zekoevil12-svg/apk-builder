@@ -166,62 +166,64 @@ jobs:
           </paths>
           EOF
 
-          PERMS_XML=""
+          # 🌟 الطريقة المبتكرة: تجميع الصلاحيات في ملف ثم حذف المكرر بـ sort -u
+          echo "android.permission.INTERNET" > /tmp/perms.txt
+          echo "android.permission.ACCESS_NETWORK_STATE" >> /tmp/perms.txt
+          echo "android.permission.READ_EXTERNAL_STORAGE" >> /tmp/perms.txt
+          echo "android.permission.WRITE_EXTERNAL_STORAGE" >> /tmp/perms.txt
+
           if [ -n "$PERMS" ]; then
             IFS=',' read -ra PARRS <<< "$PERMS"
             for p in "${PARRS[@]}"; do
               p=$(echo "$p" | tr -d ' ')
               case "$p" in
-                camera)    PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.CAMERA\"/>"$'\n' ;;
-                location)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>"$'\n'"    <uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>"$'\n' ;;
-                mic)       PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>"$'\n' ;;
-                storage)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>"$'\n'"    <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>"$'\n' ;;
-                notif)     PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\"/>"$'\n' ;;
-                vibrate)   PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.VIBRATE\"/>"$'\n' ;;
-                contacts)  PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.READ_CONTACTS\"/>"$'\n' ;;
-                phone)     PERMS_XML="${PERMS_XML}    <uses-permission android:name=\"android.permission.CALL_PHONE\"/>"$'\n' ;;
+                camera)    echo "android.permission.CAMERA" >> /tmp/perms.txt ;;
+                location)  echo "android.permission.ACCESS_FINE_LOCATION" >> /tmp/perms.txt; echo "android.permission.ACCESS_COARSE_LOCATION" >> /tmp/perms.txt ;;
+                mic)       echo "android.permission.RECORD_AUDIO" >> /tmp/perms.txt ;;
+                notif)     echo "android.permission.POST_NOTIFICATIONS" >> /tmp/perms.txt ;;
+                vibrate)   echo "android.permission.VIBRATE" >> /tmp/perms.txt ;;
+                contacts)  echo "android.permission.READ_CONTACTS" >> /tmp/perms.txt ;;
+                phone)     echo "android.permission.CALL_PHONE" >> /tmp/perms.txt ;;
               esac
             done
           fi
 
-          {
-            echo '<?xml version="1.0" encoding="utf-8"?>'
-            echo '<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
-            echo '    <uses-permission android:name="android.permission.INTERNET"/>'
-            echo '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>'
-            echo '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>'
-            echo '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>'
-            if [ -n "$PERMS_XML" ]; then
-              printf '%s' "$PERMS_XML"
-            fi
-            echo '    <application'
-            echo '        android:allowBackup="true"'
-            echo '        android:icon="@mipmap/ic_launcher"'
-            echo "        android:label=\"$APP_NAME\""
-            echo '        android:usesCleartextTraffic="true"'
-            echo '        android:requestLegacyExternalStorage="true"'
-            echo '        android:theme="@style/AppTheme">'
-            echo '        <activity'
-            echo '            android:name=".MainActivity"'
-            echo '            android:exported="true"'
-            echo '            android:configChanges="orientation|screenSize|keyboardHidden">'
-            echo '            <intent-filter>'
-            echo '                <action android:name="android.intent.action.MAIN"/>'
-            echo '                <category android:name="android.intent.category.LAUNCHER"/>'
-            echo '            </intent-filter>'
-            echo '        </activity>'
-            echo '        <provider'
-            echo '            android:name="androidx.core.content.FileProvider"'
-            echo "            android:authorities=\"$PKG_NAME.fileprovider\""
-            echo '            android:exported="false"'
-            echo '            android:grantUriPermissions="true">'
-            echo '            <meta-data'
-            echo '                android:name="android.support.FILE_PROVIDER_PATHS"'
-            echo '                android:resource="@xml/file_paths" />'
-            echo '        </provider>'
-            echo '    </application>'
-            echo '</manifest>'
-          } > "$PROJECT/app/src/main/AndroidManifest.xml"
+          # تحويل القائمة لصيغة XML نظيفة بدون أي تكرار
+          sort -u /tmp/perms.txt | sed 's/^/    <uses-permission android:name="/; s/$/"\/>/' > /tmp/perms.xml
+
+          # إنشاء ملف المانيفست النهائي
+          cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          $(cat /tmp/perms.xml)
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="$APP_NAME"
+                  android:usesCleartextTraffic="true"
+                  android:requestLegacyExternalStorage="true"
+                  android:theme="@style/AppTheme">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="$PKG_NAME.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data
+                          android:name="android.support.FILE_PROVIDER_PATHS"
+                          android:resource="@xml/file_paths" />
+                  </provider>
+              </application>
+          </manifest>
+          EOF
 
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" << 'JAVAEOF'
           package __PKG__;
@@ -287,7 +289,7 @@ jobs:
                   setContentView(webView);
 
                   createNotificationChannel();
-                  requestStoragePermission();
+                  requestPermissions();
 
                   WebSettings s = webView.getSettings();
                   s.setJavaScriptEnabled(true);
@@ -342,10 +344,15 @@ jobs:
                   else webView.loadUrl("file:///android_asset/index.html");
               }
 
-              private void requestStoragePermission() {
+              private void requestPermissions() {
                   if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 29) {
                       if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                           ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION_CODE);
+                      }
+                  }
+                  if (Build.VERSION.SDK_INT >= 33) {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
                       }
                   }
               }
