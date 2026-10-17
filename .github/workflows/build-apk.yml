@@ -171,6 +171,8 @@ jobs:
           echo "android.permission.ACCESS_NETWORK_STATE" >> /tmp/perms.txt
           echo "android.permission.READ_EXTERNAL_STORAGE" >> /tmp/perms.txt
           echo "android.permission.WRITE_EXTERNAL_STORAGE" >> /tmp/perms.txt
+          echo "android.permission.READ_MEDIA_IMAGES" >> /tmp/perms.txt
+          echo "android.permission.READ_MEDIA_VIDEO" >> /tmp/perms.txt
 
           if [ -n "$PERMS" ]; then
             IFS=',' read -ra PARRS <<< "$PERMS"
@@ -223,7 +225,6 @@ jobs:
           </manifest>
           EOF
 
-          # 🌟 الإصلاح: تجهيز الملفات وتشفيرها بشكل صحيح
           SRC_FILE="/tmp/src/source.$SRC_EXT"
           if [ -f "$SRC_FILE" ]; then
             mkdir -p /tmp/extracted
@@ -243,15 +244,11 @@ jobs:
               fi
             fi
 
-            # 🌟 التشفير: بنضغط الملفات، ونشفرها في مجلد /tmp، وبعدين ننقل الملف المشفر بس للـ assets
             cd "$PROJECT/app/src/main/assets"
             zip -r /tmp/secure.zip ./* > /dev/null 2>&1 || true
             openssl enc -aes-256-cbc -nosalt -K 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F -iv 0102030405060708090A0B0C0D0E0F10 -in /tmp/secure.zip -out /tmp/secure.bin
             
-            # مسح الملفات الأصلية من الـ assets
             rm -rf "$PROJECT/app/src/main/assets"/*
-            
-            # نقل الملف المشفر بس للـ assets
             mv /tmp/secure.bin "$PROJECT/app/src/main/assets/secure.bin"
             echo "🔒 تم تشفير ملفات الموقع بنجاح!"
           fi
@@ -385,14 +382,30 @@ jobs:
                           });
                       }
 
+                      // 🌟 تحسين فتح مستعرض الملفات للرفع
                       @Override
                       public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
                           if (mFilePathCallback != null) mFilePathCallback.onReceiveValue(null);
                           mFilePathCallback = filePathCallback;
+                          
+                          toast("⏳ جاري فتح الاستديو...");
+
                           Intent intent = fileChooserParams.createIntent();
                           intent.addCategory(Intent.CATEGORY_OPENABLE);
-                          try { startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE); } catch (ActivityNotFoundException e) {
-                              mFilePathCallback = null; return false;
+                          try { 
+                              startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE); 
+                          } catch (ActivityNotFoundException e) {
+                              // خطة بديلة لو مفيش مستعرض ملفات أساسي
+                              Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                              fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                              fallback.setType("*/*");
+                              try {
+                                  startActivityForResult(fallback, FILE_CHOOSER_RESULT_CODE);
+                              } catch (ActivityNotFoundException ex) {
+                                  mFilePathCallback = null; 
+                                  toast("❌ لا يوجد تطبيق لفتح الملفات");
+                                  return false;
+                              }
                           }
                           return true;
                       }
@@ -411,7 +424,6 @@ jobs:
                       }
                   });
 
-                  // 🌟 فك التشفير وتشغيل الموقع
                   if ("__SRC__".equals("url")) {
                       webView.loadUrl("__URL__");
                   } else {
@@ -419,7 +431,6 @@ jobs:
                       if (err != null) {
                           toast("❌ فشل فك التشفير: " + err);
                       } else {
-                          // البحث عن index.html في أي مكان داخل المجلد
                           File indexFile = findFile(new File(getFilesDir(), "app_web"), "index.html");
                           if (indexFile != null) {
                               webView.loadUrl("file://" + indexFile.getAbsolutePath());
@@ -427,6 +438,27 @@ jobs:
                               toast("❌ لم يتم العثور على index.html");
                           }
                       }
+                  }
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  if (requestCode == FILE_CHOOSER_RESULT_CODE) {
+                      if (mFilePathCallback == null) return;
+                      Uri[] results = null;
+                      if (resultCode == Activity.RESULT_OK && data != null) {
+                          String dataString = data.getDataString();
+                          if (dataString != null) results = new Uri[]{Uri.parse(dataString)};
+                          else if (data.getClipData() != null) {
+                              int count = data.getClipData().getItemCount();
+                              results = new Uri[count];
+                              for (int i = 0; i < count; i++) results[i] = data.getClipData().getItemAt(i).getUri();
+                          }
+                      }
+                      mFilePathCallback.onReceiveValue(results);
+                      mFilePathCallback = null;
+                  } else {
+                      super.onActivityResult(requestCode, resultCode, data);
                   }
               }
 
@@ -483,10 +515,10 @@ jobs:
                           }
                       }
                       zis.close();
-                      return null; // نجاح
+                      return null;
                   } catch (Exception e) {
                       e.printStackTrace();
-                      return e.toString(); // إرجاع الخطأ
+                      return e.toString();
                   }
               }
 
@@ -515,15 +547,17 @@ jobs:
                   webView.evaluateJavascript(js, null);
               }
 
+              // 🌟 طلب صلاحيات الصور والملفات بشكل صحيح
               private void requestPermissions() {
-                  if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 29) {
-                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION_CODE);
-                      }
-                  }
-                  if (Build.VERSION.SDK_INT >= 33) {
-                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                          ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+                  if (Build.VERSION.SDK_INT >= 23) {
+                      if (Build.VERSION.SDK_INT >= 33) {
+                          if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
+                              ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO}, 101);
+                          }
+                      } else {
+                          if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                              ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION_CODE);
+                          }
                       }
                   }
               }
