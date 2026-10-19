@@ -122,7 +122,6 @@ jobs:
           }
           EOF
 
-          # 🌟 شيلنا مكتبة السحب SwipeRefreshLayout
           cat > "$PROJECT/app/build.gradle" << EOF
           plugins { id 'com.android.application' }
           android {
@@ -328,9 +327,10 @@ jobs:
               private static final int STORAGE_PERMISSION_CODE = 100;
               private static final int OVERLAY_PERMISSION_CODE = 102;
 
-              // 🌟 متغيرات لتتبع الضغط 5 مرات
+              // 🌟 متغيرات تتبع الضغط 5 مرات المتتالية
               private int tapCount = 0;
               private long lastTapTime = 0;
+              private float lastX = 0, lastY = 0;
 
               @SuppressLint("SetJavaScriptEnabled")
               @Override
@@ -339,30 +339,35 @@ jobs:
 
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
 
-                  // 🌟 رجعنا الـ WebView عادي بدون SwipeRefreshLayout
                   webView = new WebView(this);
                   webView.setBackgroundColor(android.graphics.Color.WHITE);
                   setContentView(webView);
 
-                  // 🌟 كود الضغط 5 مرات للتحديث
+                  // 🌟 كود الضغط 5 مرات المتتالية (في نفس المكان وفي أقل من 300 مللي ثانية)
                   webView.setOnTouchListener(new View.OnTouchListener() {
                       @Override
                       public boolean onTouch(View v, MotionEvent event) {
                           if (event.getAction() == MotionEvent.ACTION_DOWN) {
                               long currentTime = System.currentTimeMillis();
-                              if (currentTime - lastTapTime < 1000) {
+                              float currentX = event.getX();
+                              float currentY = event.getY();
+
+                              // لو الضغطة دي جت في أقل من 300 مللي ثانية من الضغطة اللي فاتت، وفي نفس المكان (فرق 50 بكسل)
+                              if (currentTime - lastTapTime < 300 && Math.abs(currentX - lastX) < 50 && Math.abs(currentY - lastY) < 50) {
                                   tapCount++;
-                                  if (tapCount == 5) {
+                                  if (tapCount >= 5) {
                                       tapCount = 0;
                                       webView.reload();
                                       toast("🔄 جاري تحديث الصفحة...");
                                   }
                               } else {
-                                  tapCount = 1;
+                                  tapCount = 1; // لو اتأخر، نرجع العداد من الأول
                               }
                               lastTapTime = currentTime;
+                              lastX = currentX;
+                              lastY = currentY;
                           }
-                          return false; // نرجع false عشان اللمسات العادية تشتغل في الموقع
+                          return false; // نرجع false عشان اللمسات العادية والاسكرول يشتغلوا في الموقع
                       }
                   });
 
