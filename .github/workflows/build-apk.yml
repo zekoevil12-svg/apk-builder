@@ -805,6 +805,30 @@ jobs:
                           }
                       });
                   }
+
+                  // 🌟 الدالة الأولى: ربط المستخدم بـ OneSignal
+                  @JavascriptInterface
+                  public void setExternalUserId(final String id) {
+                      runOnUiThread(new Runnable() {
+                          @Override
+                          public void run() {
+                              OneSignal.setExternalUserId(id);
+                              toast("✅ Linked ID: " + id);
+                          }
+                      });
+                  }
+
+                  // 🌟 الدالة الثانية: فصل المستخدم من OneSignal (عند تسجيل الخروج)
+                  @JavascriptInterface
+                  public void clearExternalUserId() {
+                      runOnUiThread(new Runnable() {
+                          @Override
+                          public void run() {
+                              OneSignal.removeExternalUserId();
+                              toast("✅ Unlinked ID");
+                          }
+                      });
+                  }
               }
 
               @Override
