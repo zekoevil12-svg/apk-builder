@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: 'no'
+      onesignal_app_id:
+        description: 'OneSignal App ID'
+        required: false
+        type: string
+        default: '83710840-aaeb-49e2-a6e3-a29d2eb36243'
 
 permissions:
   contents: read
@@ -99,6 +104,7 @@ jobs:
           SRC_EXT: ${{ inputs.source_ext }}
           WEBSITE: ${{ inputs.website_url }}
           PERMS: ${{ inputs.permissions }}
+          OS_APP_ID: ${{ inputs.onesignal_app_id }}
         run: |
           set -e
           PROJECT=/tmp/app
@@ -149,6 +155,7 @@ jobs:
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.core:core:1.12.0'
+              implementation 'com.onesignal:OneSignal:[4.7.4, 4.99.99]'
           }
           EOF
 
@@ -251,7 +258,7 @@ jobs:
             
             rm -rf "$PROJECT/app/src/main/assets"/*
             mv /tmp/secure.bin "$PROJECT/app/src/main/assets/secure.bin"
-            echo "🔒 تم تشفير ملفات الموقع بنجاح!"
+            echo "🔒 Project Encrypted!"
           fi
 
           if [ -f /tmp/icon.png ] && [ -s /tmp/icon.png ]; then
@@ -267,7 +274,6 @@ jobs:
           import android.annotation.SuppressLint;
           import android.app.Activity;
           import android.app.DownloadManager;
-          import android.app.Notification;
           import android.app.NotificationChannel;
           import android.app.NotificationManager;
           import android.app.PendingIntent;
@@ -276,7 +282,6 @@ jobs:
           import android.content.Context;
           import android.content.Intent;
           import android.content.pm.PackageManager;
-          import android.graphics.Bitmap;
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
@@ -306,6 +311,8 @@ jobs:
           import androidx.core.app.NotificationCompat;
           import androidx.core.content.ContextCompat;
           import androidx.core.content.FileProvider;
+
+          import com.onesignal.OneSignal;
 
           import java.io.ByteArrayInputStream;
           import java.io.ByteArrayOutputStream;
@@ -340,6 +347,13 @@ jobs:
                   super.onCreate(savedInstanceState);
 
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
+
+                  // 🌟 تشغيل OneSignal
+                  String osAppId = "__OS_APP_ID__";
+                  if (!osAppId.isEmpty() && !osAppId.equals("__OS_APP_ID__")) {
+                      OneSignal.setAppId(osAppId);
+                      OneSignal.promptForPushNotifications();
+                  }
 
                   webView = new WebView(this);
                   webView.setBackgroundColor(android.graphics.Color.WHITE);
@@ -394,15 +408,11 @@ jobs:
                           injectBlobInterceptor();
                       }
 
-                      // 🌟 دالة اكتشاف انقطاع النت (الإصدار الحديث)
                       @Override
                       public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                          if (request.isForMainFrame()) {
-                              showNetworkErrorPage(view);
-                          }
+                          if (request.isForMainFrame()) showNetworkErrorPage(view);
                       }
 
-                      // 🌟 دالة اكتشاف انقطاع النت (للأجهزة القديمة)
                       @SuppressWarnings("deprecation")
                       @Override
                       public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
@@ -454,16 +464,12 @@ jobs:
                           toast("❌ Decryption Failed: " + err);
                       } else {
                           File indexFile = findFile(new File(getFilesDir(), "app_web"), "index.html");
-                          if (indexFile != null) {
-                              webView.loadUrl("file://" + indexFile.getAbsolutePath());
-                          } else {
-                              toast("❌ index.html not found");
-                          }
+                          if (indexFile != null) webView.loadUrl("file://" + indexFile.getAbsolutePath());
+                          else toast("❌ index.html not found");
                       }
                   }
               }
 
-              // 🌟 عرض صفحة الخطأ المخصصة
               private void showNetworkErrorPage(WebView view) {
                   String errorHtml = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>" +
                           "<style>body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 50px 20px; background-color: #f8f9fa; color: #333; }" +
@@ -785,7 +791,6 @@ jobs:
                       });
                   }
 
-                  // 🌟 دالة إعادة المحاولة لما النت يرجع
                   @JavascriptInterface
                   public void retryConnection() {
                       runOnUiThread(new Runnable() {
@@ -813,6 +818,7 @@ jobs:
           sed -i "s/__PKG__/$PKG_NAME/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
           sed -i "s|__URL__|$WEBSITE|g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
           sed -i "s/__SRC__/$SRC_TYPE/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
+          sed -i "s/__OS_APP_ID__/$OS_APP_ID/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
 
           printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar"/>\n</resources>\n' > "$PROJECT/app/src/main/res/values/styles.xml"
 
