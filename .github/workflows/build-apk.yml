@@ -9,42 +9,19 @@ on:
       package_name:
         required: true
         type: string
-      source_type:
+      html_source_url:
+        description: 'رابط ملف python-studio.html (مثلاً من GitHub Raw)'
         required: true
         type: string
-      website_url:
-        required: false
-        type: string
-        default: 'https://example.com'
-      source_url:
-        required: false
-        type: string
-        default: ''
-      source_ext:
-        required: false
-        type: string
-        default: ''
       icon_url:
         required: false
         type: string
         default: ''
-      permissions:
-        required: false
-        type: string
-        default: ''
-      server_url:
-        required: false
-        type: string
-        default: ''
-      enable_notifications:
-        required: false
-        type: string
-        default: 'no'
       onesignal_app_id:
-        description: 'OneSignal App ID'
+        description: 'OneSignal App ID (اختياري)'
         required: false
         type: string
-        default: '83710840-aaeb-49e2-a6e3-a29d2eb36243'
+        default: ''
 
 permissions:
   contents: read
@@ -52,7 +29,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -85,25 +62,18 @@ jobs:
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Download source
-        if: ${{ inputs.source_url != '' }}
+      - name: Download HTML & Icon
         run: |
           mkdir -p /tmp/src
-          curl -L --fail -o "/tmp/src/source.${{ inputs.source_ext }}" "${{ inputs.source_url }}"
-
-      - name: Download icon
-        if: ${{ inputs.icon_url != '' }}
-        run: |
-          curl -L --fail -o /tmp/icon.png "${{ inputs.icon_url }}" || true
+          curl -L --fail -o /tmp/src/index.html "${{ inputs.html_source_url }}"
+          if [ -n "${{ inputs.icon_url }}" ]; then
+            curl -L --fail -o /tmp/icon.png "${{ inputs.icon_url }}" || true
+          fi
 
       - name: Create Android project
         env:
           APP_NAME: ${{ inputs.app_name }}
           PKG_NAME: ${{ inputs.package_name }}
-          SRC_TYPE: ${{ inputs.source_type }}
-          SRC_EXT: ${{ inputs.source_ext }}
-          WEBSITE: ${{ inputs.website_url }}
-          PERMS: ${{ inputs.permissions }}
           OS_APP_ID: ${{ inputs.onesignal_app_id }}
         run: |
           set -e
@@ -115,17 +85,13 @@ jobs:
           mkdir -p "$PROJECT/app/src/main/res/xml"
           mkdir -p "$PROJECT/app/src/main/res/mipmap-hdpi"
           mkdir -p "$PROJECT/app/src/main/assets"
+          mkdir -p "$PROJECT/app/src/main/python"
 
-          printf 'rootProject.name = "MyApp"\ninclude ":app"\n' > "$PROJECT/settings.gradle"
+          printf 'rootProject.name = "PythonStudio"\ninclude ":app"\n' > "$PROJECT/settings.gradle"
 
           cat > "$PROJECT/build.gradle" << 'EOF'
-          buildscript {
-              repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:8.1.4' }
-          }
-          allprojects {
-              repositories { google(); mavenCentral() }
-          }
+          buildscript { repositories { google(); mavenCentral() } dependencies { classpath 'com.android.tools.build:gradle:8.1.4' } }
+          allprojects { repositories { google(); mavenCentral() } }
           EOF
 
           cat > "$PROJECT/app/build.gradle" << EOF
@@ -133,28 +99,13 @@ jobs:
           android {
               namespace '$PKG_NAME'
               compileSdk 34
-              defaultConfig {
-                  applicationId "$PKG_NAME"
-                  minSdk 21
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
-              }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-          }
-          configurations.all {
-              resolutionStrategy.eachDependency { details ->
-                  if (details.requested.group == 'org.jetbrains.kotlin' && details.requested.name.startsWith('kotlin-stdlib')) {
-                      details.useVersion '1.8.22'
-                  }
-              }
+              defaultConfig { applicationId "$PKG_NAME"; minSdk 24; targetSdk 34; versionCode 1; versionName "1.0" }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
           }
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.core:core:1.12.0'
+              implementation 'androidx.webkit:webkit:1.10.0'
               implementation 'com.onesignal:OneSignal:[4.7.4, 4.99.99]'
           }
           EOF
@@ -166,39 +117,20 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <paths>
               <external-path name="external" path="." />
-              <external-files-path name="external_files" path="." />
               <files-path name="files" path="." />
               <cache-path name="cache" path="." />
-              <external-cache-path name="external_cache" path="." />
           </paths>
           EOF
 
-          echo "android.permission.INTERNET" > /tmp/perms.txt
-          echo "android.permission.ACCESS_NETWORK_STATE" >> /tmp/perms.txt
-          echo "android.permission.READ_EXTERNAL_STORAGE" >> /tmp/perms.txt
-          echo "android.permission.WRITE_EXTERNAL_STORAGE" >> /tmp/perms.txt
-          echo "android.permission.READ_MEDIA_IMAGES" >> /tmp/perms.txt
-          echo "android.permission.READ_MEDIA_VIDEO" >> /tmp/perms.txt
-          echo "android.permission.POST_NOTIFICATIONS" >> /tmp/perms.txt
-          echo "android.permission.SYSTEM_ALERT_WINDOW" >> /tmp/perms.txt
-
-          if [ -n "$PERMS" ]; then
-            IFS=',' read -ra PARRS <<< "$PERMS"
-            for p in "${PARRS[@]}"; do
-              p=$(echo "$p" | tr -d ' ')
-              case "$p" in
-                camera)    echo "android.permission.CAMERA" >> /tmp/perms.txt ;;
-                location)  echo "android.permission.ACCESS_FINE_LOCATION" >> /tmp/perms.txt; echo "android.permission.ACCESS_COARSE_LOCATION" >> /tmp/perms.txt ;;
-                mic)       echo "android.permission.RECORD_AUDIO" >> /tmp/perms.txt ;;
-                notif)     echo "android.permission.POST_NOTIFICATIONS" >> /tmp/perms.txt ;;
-                vibrate)   echo "android.permission.VIBRATE" >> /tmp/perms.txt ;;
-                contacts)  echo "android.permission.READ_CONTACTS" >> /tmp/perms.txt ;;
-                phone)     echo "android.permission.CALL_PHONE" >> /tmp/perms.txt ;;
-              esac
-            done
-          fi
-
-          sort -u /tmp/perms.txt | sed 's/^/    <uses-permission android:name="/; s/$/"\/>/' > /tmp/perms.xml
+          sort -u > /tmp/perms.txt << 'EOF'
+          android.permission.INTERNET
+          android.permission.ACCESS_NETWORK_STATE
+          android.permission.READ_EXTERNAL_STORAGE
+          android.permission.WRITE_EXTERNAL_STORAGE
+          android.permission.READ_MEDIA_IMAGES
+          android.permission.POST_NOTIFICATIONS
+          EOF
+          sed 's/^/    <uses-permission android:name="/; s/$/"\/>/' /tmp/perms.txt > /tmp/perms.xml
 
           cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
           <?xml version="1.0" encoding="utf-8"?>
@@ -214,7 +146,8 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
-                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+                      android:windowSoftInputMode="adjustResize">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
@@ -233,122 +166,49 @@ jobs:
           </manifest>
           EOF
 
-          SRC_FILE="/tmp/src/source.$SRC_EXT"
-          if [ -f "$SRC_FILE" ]; then
-            mkdir -p /tmp/extracted
-            if [ "$SRC_EXT" = "zip" ]; then
-              unzip -q "$SRC_FILE" -d /tmp/extracted
-              COUNT=$(ls -1 /tmp/extracted | wc -l)
-              if [ "$COUNT" -eq 1 ] && [ -d "/tmp/extracted/$(ls -1 /tmp/extracted)" ]; then
-                INNER=$(ls -1 /tmp/extracted)
-                cp -r /tmp/extracted/"$INNER"/* "$PROJECT/app/src/main/assets/" 2>/dev/null || true
-              else
-                cp -r /tmp/extracted/* "$PROJECT/app/src/main/assets/" 2>/dev/null || true
-              fi
-            else
-              cp "$SRC_FILE" "$PROJECT/app/src/main/assets/index.$SRC_EXT"
-              if [ "$SRC_EXT" != "html" ] && [ "$SRC_EXT" != "htm" ]; then
-                printf '<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>%s</title></head>\n<body><div id="app"></div>\n<script src="index.%s"></script>\n</body></html>\n' "$APP_NAME" "$SRC_EXT" > "$PROJECT/app/src/main/assets/index.html"
-              fi
-            fi
-
-            cd "$PROJECT/app/src/main/assets"
-            zip -r /tmp/secure.zip ./* > /dev/null 2>&1 || true
-            openssl enc -aes-256-cbc -nosalt -K 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F -iv 0102030405060708090A0B0C0D0E0F10 -in /tmp/secure.zip -out /tmp/secure.bin
-            
-            rm -rf "$PROJECT/app/src/main/assets"/*
-            mv /tmp/secure.bin "$PROJECT/app/src/main/assets/secure.bin"
-            echo "🔒 Project Encrypted!"
-          fi
-
-          if [ -f /tmp/icon.png ] && [ -s /tmp/icon.png ]; then
-            cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"
-          else
+          cp /tmp/src/index.html "$PROJECT/app/src/main/assets/index.html"
+          if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; else
             printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"
           fi
 
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" << 'JAVAEOF'
           package __PKG__;
 
-          import android.Manifest;
           import android.annotation.SuppressLint;
-          import android.app.Activity;
           import android.app.DownloadManager;
-          import android.app.NotificationChannel;
-          import android.app.NotificationManager;
-          import android.app.PendingIntent;
           import android.content.ActivityNotFoundException;
-          import android.content.ContentValues;
           import android.content.Context;
           import android.content.Intent;
-          import android.content.pm.PackageManager;
           import android.net.Uri;
-          import android.os.Build;
           import android.os.Bundle;
           import android.os.Environment;
-          import android.provider.MediaStore;
-          import android.provider.Settings;
-          import android.util.Base64;
-          import android.view.MotionEvent;
-          import android.view.View;
           import android.view.WindowManager;
           import android.webkit.CookieManager;
           import android.webkit.DownloadListener;
-          import android.webkit.JavascriptInterface;
-          import android.webkit.MimeTypeMap;
           import android.webkit.PermissionRequest;
           import android.webkit.URLUtil;
           import android.webkit.ValueCallback;
           import android.webkit.WebChromeClient;
-          import android.webkit.WebResourceError;
           import android.webkit.WebResourceRequest;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import android.webkit.WebViewClient;
           import android.widget.Toast;
           import androidx.appcompat.app.AppCompatActivity;
-          import androidx.core.app.ActivityCompat;
-          import androidx.core.app.NotificationCompat;
-          import androidx.core.content.ContextCompat;
-          import androidx.core.content.FileProvider;
-
+          import androidx.webkit.WebViewAssetLoader;
+          import androidx.webkit.WebViewClientCompat;
           import com.onesignal.OneSignal;
-
-          import java.io.ByteArrayInputStream;
-          import java.io.ByteArrayOutputStream;
-          import java.io.File;
-          import java.io.FileOutputStream;
-          import java.io.InputStream;
-          import java.io.OutputStream;
-          import java.util.zip.ZipEntry;
-          import java.util.zip.ZipInputStream;
-
-          import javax.crypto.Cipher;
-          import javax.crypto.spec.IvParameterSpec;
-          import javax.crypto.spec.SecretKeySpec;
 
           public class MainActivity extends AppCompatActivity {
               private WebView webView;
-              private static final String CHANNEL_ID_DOWNLOAD = "downloads_channel";
-              private static final String CHANNEL_ID_PUSH = "push_notifications_channel";
-              private static final int NOTIF_ID = 1001;
               private ValueCallback<Uri[]> mFilePathCallback;
               private static final int FILE_CHOOSER_RESULT_CODE = 1;
-              private static final int STORAGE_PERMISSION_CODE = 100;
-              private static final int OVERLAY_PERMISSION_CODE = 102;
-
-              private int tapCount = 0;
-              private long lastTapTime = 0;
-              private float lastX = 0, lastY = 0;
 
               @SuppressLint("SetJavaScriptEnabled")
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE);
-
-                  // 🌟 تشغيل OneSignal
                   String osAppId = "__OS_APP_ID__";
                   if (!osAppId.isEmpty() && !osAppId.equals("__OS_APP_ID__")) {
                       OneSignal.setAppId(osAppId);
@@ -356,37 +216,7 @@ jobs:
                   }
 
                   webView = new WebView(this);
-                  webView.setBackgroundColor(android.graphics.Color.WHITE);
                   setContentView(webView);
-
-                  webView.setOnTouchListener(new View.OnTouchListener() {
-                      @Override
-                      public boolean onTouch(View v, MotionEvent event) {
-                          if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                              long currentTime = System.currentTimeMillis();
-                              float currentX = event.getX();
-                              float currentY = event.getY();
-
-                              if (currentTime - lastTapTime < 300 && Math.abs(currentX - lastX) < 50 && Math.abs(currentY - lastY) < 50) {
-                                  tapCount++;
-                                  if (tapCount >= 5) {
-                                      tapCount = 0;
-                                      webView.reload();
-                                      toast("🔄 Page Refreshed");
-                                  }
-                              } else {
-                                  tapCount = 1;
-                              }
-                              lastTapTime = currentTime;
-                              lastX = currentX;
-                              lastY = currentY;
-                          }
-                          return false;
-                      }
-                  });
-
-                  createNotificationChannels();
-                  requestPermissions();
 
                   WebSettings s = webView.getSettings();
                   s.setJavaScriptEnabled(true);
@@ -397,124 +227,73 @@ jobs:
                   s.setAllowUniversalAccessFromFileURLs(true);
                   s.setMediaPlaybackRequiresUserGesture(false);
                   s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                  s.setCacheMode(WebSettings.LOAD_DEFAULT);
 
                   CookieManager.getInstance().setAcceptCookie(true);
                   CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public void onPageFinished(WebView view, String url) {
-                          super.onPageFinished(view, url);
-                          injectBlobInterceptor();
-                      }
-
-                      @Override
-                      public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                          if (request.isForMainFrame()) showNetworkErrorPage(view);
-                      }
-
-                      @SuppressWarnings("deprecation")
-                      @Override
-                      public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                          showNetworkErrorPage(view);
-                      }
-                  });
-
+                  // تفعيل رفع الملفات لـ WebView (ضروري لـ Pyodide)
                   webView.setWebChromeClient(new WebChromeClient() {
                       @Override
                       public void onPermissionRequest(final PermissionRequest request) {
-                          runOnUiThread(new Runnable() {
-                              @Override
-                              public void run() { request.grant(request.getResources()); }
-                          });
+                          runOnUiThread(() -> request.grant(request.getResources()));
                       }
 
                       @Override
                       public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
                           if (mFilePathCallback != null) mFilePathCallback.onReceiveValue(null);
                           mFilePathCallback = filePathCallback;
-                          toast("⏳ Opening Gallery...");
+                          
                           Intent intent = fileChooserParams.createIntent();
-                          intent.addCategory(Intent.CATEGORY_OPENABLE);
-                          try { startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE); } catch (ActivityNotFoundException e) {
-                              mFilePathCallback = null; return false;
+                          // تفعيل اختيار مجلدات (لو النظام يدعم)
+                          if (fileChooserParams.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+                              intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                          }
+                          
+                          try {
+                              startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE);
+                          } catch (ActivityNotFoundException e) {
+                              mFilePathCallback = null;
+                              return false;
                           }
                           return true;
                       }
                   });
 
-                  webView.addJavascriptInterface(new WebAppInterface(), "Android");
-
-                  webView.setDownloadListener(new DownloadListener() {
+                  webView.setWebViewClient(new WebViewClient() {
                       @Override
-                      public void onDownloadStart(String url, String userAgent, String contentDisposition, String mimeType, long contentLength) {
-                          if (url == null) return;
-                          String u = url.trim();
-                          if (u.startsWith("blob:")) handleBlobUrl(u, mimeType);
-                          else if (u.startsWith("data:")) handleDataUrl(u, mimeType);
-                          else handleHttpDownload(u, userAgent, contentDisposition, mimeType);
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          return false; // تحميل عادي داخل التطبيق
                       }
                   });
 
-                  if ("__SRC__".equals("url")) {
-                      webView.loadUrl("__URL__");
-                  } else {
-                      String err = decryptAndUnzip();
-                      if (err != null) {
-                          toast("❌ Decryption Failed: " + err);
-                      } else {
-                          File indexFile = findFile(new File(getFilesDir(), "app_web"), "index.html");
-                          if (indexFile != null) webView.loadUrl("file://" + indexFile.getAbsolutePath());
-                          else toast("❌ index.html not found");
+                  // دعم تحميل الملفات (ZIP) من داخل Pyodide
+                  webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
+                      try {
+                          DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
+                          if (mimeType != null && !mimeType.isEmpty()) request.setMimeType(mimeType);
+                          String cookies = CookieManager.getInstance().getCookie(url);
+                          if (cookies != null) request.addRequestHeader("cookie", cookies);
+                          if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
+                          
+                          String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
+                          request.setDescription("جاري التحميل...");
+                          request.setTitle(fileName);
+                          request.allowScanningByMediaScanner();
+                          request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                          request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
+                          
+                          DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+                          if (dm != null) {
+                              dm.enqueue(request);
+                              Toast.makeText(getApplicationContext(), "📥 جاري التحميل: " + fileName, Toast.LENGTH_LONG).show();
+                          }
+                      } catch (Exception e) {
+                          Toast.makeText(getApplicationContext(), "❌ فشل التحميل: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                       }
-                  }
-              }
+                  });
 
-              private void showNetworkErrorPage(WebView view) {
-                  String errorHtml = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>" +
-                          "<style>body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 50px 20px; background-color: #f8f9fa; color: #333; }" +
-                          ".icon { font-size: 60px; color: #ff4757; margin-bottom: 20px; }" +
-                          "h1 { font-size: 24px; margin-bottom: 10px; }" +
-                          "p { color: #666; font-size: 16px; margin-bottom: 30px; }" +
-                          "button { padding: 12px 30px; font-size: 16px; color: #fff; background-color: #2ed573; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }" +
-                          "button:hover { background-color: #26b863; }</style></head>" +
-                          "<body><div class='icon'>📡</div>" +
-                          "<h1>No Internet Connection</h1>" +
-                          "<p>Please open your internet and try again.</p>" +
-                          "<button onclick='Android.retryConnection()'>Try Again</button></body></html>";
-                  view.loadDataWithBaseURL(null, errorHtml, "text/html", "utf-8", null);
-              }
-
-              private void createNotificationChannels() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      NotificationManager nm = getSystemService(NotificationManager.class);
-                      if (nm != null) {
-                          NotificationChannel downloadCh = new NotificationChannel(CHANNEL_ID_DOWNLOAD, "Downloads", NotificationManager.IMPORTANCE_LOW);
-                          nm.createNotificationChannel(downloadCh);
-                          NotificationChannel pushCh = new NotificationChannel(CHANNEL_ID_PUSH, "Push Notifications", NotificationManager.IMPORTANCE_HIGH);
-                          pushCh.setDescription("External notifications");
-                          pushCh.enableVibration(true);
-                          nm.createNotificationChannel(pushCh);
-                      }
-                  }
-              }
-
-              private void showPushNotification(String title, String body) {
-                  Intent intent = new Intent(this, MainActivity.class);
-                  intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                  PendingIntent pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE);
-
-                  NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID_PUSH)
-                      .setSmallIcon(android.R.drawable.ic_dialog_info)
-                      .setContentTitle(title)
-                      .setContentText(body)
-                      .setAutoCancel(true)
-                      .setPriority(NotificationCompat.PRIORITY_HIGH)
-                      .setDefaults(NotificationCompat.DEFAULT_ALL)
-                      .setContentIntent(pi);
-
-                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                  if (nm != null) nm.notify((int) System.currentTimeMillis(), b.build());
+                  webView.loadUrl("file:///android_asset/index.html");
               }
 
               @Override
@@ -522,312 +301,22 @@ jobs:
                   if (requestCode == FILE_CHOOSER_RESULT_CODE) {
                       if (mFilePathCallback == null) return;
                       Uri[] results = null;
-                      if (resultCode == Activity.RESULT_OK && data != null) {
+                      if (resultCode == RESULT_OK && data != null) {
                           String dataString = data.getDataString();
-                          if (dataString != null) results = new Uri[]{Uri.parse(dataString)};
-                          else if (data.getClipData() != null) {
+                          if (dataString != null) {
+                              results = new Uri[]{Uri.parse(dataString)};
+                          } else if (data.getClipData() != null) {
                               int count = data.getClipData().getItemCount();
                               results = new Uri[count];
-                              for (int i = 0; i < count; i++) results[i] = data.getClipData().getItemAt(i).getUri();
+                              for (int i = 0; i < count; i++) {
+                                  results[i] = data.getClipData().getItemAt(i).getUri();
+                              }
                           }
                       }
                       mFilePathCallback.onReceiveValue(results);
                       mFilePathCallback = null;
                   } else {
                       super.onActivityResult(requestCode, resultCode, data);
-                  }
-              }
-
-              private File findFile(File dir, String fileName) {
-                  if (dir == null || !dir.exists()) return null;
-                  File[] files = dir.listFiles();
-                  if (files != null) {
-                      for (File file : files) {
-                          if (file.isDirectory()) {
-                              File found = findFile(file, fileName);
-                              if (found != null) return found;
-                          } else if (file.getName().equalsIgnoreCase(fileName)) {
-                              return file;
-                          }
-                      }
-                  }
-                  return null;
-              }
-
-              private String decryptAndUnzip() {
-                  try {
-                      InputStream is = getAssets().open("secure.bin");
-                      ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                      byte[] buffer = new byte[1024];
-                      int len;
-                      while ((len = is.read(buffer)) != -1) baos.write(buffer, 0, len);
-                      is.close();
-                      byte[] encryptedData = baos.toByteArray();
-
-                      byte[] keyBytes = hexStringToByteArray("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F");
-                      byte[] ivBytes = hexStringToByteArray("0102030405060708090A0B0C0D0E0F10");
-                      SecretKeySpec secretKey = new SecretKeySpec(keyBytes, "AES");
-                      IvParameterSpec ivSpec = new IvParameterSpec(ivBytes);
-                      Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-                      cipher.init(Cipher.DECRYPT_MODE, secretKey, ivSpec);
-                      byte[] decryptedData = cipher.doFinal(encryptedData);
-
-                      File destDir = new File(getFilesDir(), "app_web");
-                      if (!destDir.exists()) destDir.mkdirs();
-                      
-                      ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(decryptedData));
-                      ZipEntry entry;
-                      while ((entry = zis.getNextEntry()) != null) {
-                          File file = new File(destDir, entry.getName());
-                          if (entry.isDirectory()) {
-                              file.mkdirs();
-                          } else {
-                              file.getParentFile().mkdirs();
-                              FileOutputStream fos = new FileOutputStream(file);
-                              byte[] buf = new byte[1024];
-                              int length;
-                              while ((length = zis.read(buf)) > 0) fos.write(buf, 0, length);
-                              fos.close();
-                          }
-                      }
-                      zis.close();
-                      return null;
-                  } catch (Exception e) {
-                      e.printStackTrace();
-                      return e.toString();
-                  }
-              }
-
-              private byte[] hexStringToByteArray(String s) {
-                  int len = s.length();
-                  byte[] data = new byte[len / 2];
-                  for (int i = 0; i < len; i += 2) {
-                      data[i / 2] = (byte) ((Character.digit(s.charAt(i), 16) << 4)
-                              + Character.digit(s.charAt(i+1), 16));
-                  }
-                  return data;
-              }
-
-              private void injectBlobInterceptor() {
-                  String js = "(function() {" +
-                      "if (window._blobInterceptorInstalled) return;" +
-                      "window._blobInterceptorInstalled = true;" +
-                      "window._blobCache = {};" +
-                      "var originalCreate = URL.createObjectURL;" +
-                      "URL.createObjectURL = function(blob) {" +
-                      "  var url = originalCreate.call(URL, blob);" +
-                      "  window._blobCache[url] = blob;" +
-                      "  return url;" +
-                      "};" +
-                      "})();";
-                  webView.evaluateJavascript(js, null);
-              }
-
-              private void requestPermissions() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                      if (!Settings.canDrawOverlays(this)) {
-                          Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                  Uri.parse("package:" + getPackageName()));
-                          try { startActivityForResult(intent, OVERLAY_PERMISSION_CODE); } catch (Exception e) {}
-                      }
-                  }
-
-                  if (Build.VERSION.SDK_INT >= 23) {
-                      if (Build.VERSION.SDK_INT >= 33) {
-                          if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) != PackageManager.PERMISSION_GRANTED) {
-                              ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.POST_NOTIFICATIONS}, 101);
-                          }
-                      } else {
-                          if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                              ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, STORAGE_PERMISSION_CODE);
-                          }
-                      }
-                  }
-              }
-
-              private void handleHttpDownload(String url, String userAgent, String contentDisposition, String mimeType) {
-                  try {
-                      DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                      if (mimeType != null && !mimeType.isEmpty()) request.setMimeType(mimeType);
-                      String cookies = CookieManager.getInstance().getCookie(url);
-                      if (cookies != null) request.addRequestHeader("cookie", cookies);
-                      if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
-                      request.setDescription("Downloading...");
-                      String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-                      request.setTitle(fileName);
-                      request.allowScanningByMediaScanner();
-                      request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                      request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-                      DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                      if (dm != null) { dm.enqueue(request); toast("📥 Downloading: " + fileName); }
-                  } catch (Exception e) { toast("❌ Download Failed: " + e.getMessage()); }
-              }
-
-              private void handleBlobUrl(String blobUrl, String mimeType) {
-                  final String mt = (mimeType == null || mimeType.isEmpty()) ? "application/octet-stream" : mimeType;
-                  String js = "(function() {" +
-                      "try {" +
-                      "var blob = window._blobCache && window._blobCache['" + blobUrl + "'];" +
-                      "if (!blob) { Android.saveError('File expired'); return; }" +
-                      "var reader = new FileReader();" +
-                      "reader.onloadend = function() {" +
-                      "  var b64 = reader.result.split(',')[1];" +
-                      "  Android.saveBase64(b64, '" + mt + "');" +
-                      "};" +
-                      "reader.readAsDataURL(blob);" +
-                      "} catch(err) { Android.saveError(err.message); }" +
-                      "})();";
-                  webView.evaluateJavascript(js, null);
-                  toast("📥 Downloading...");
-              }
-
-              private void handleDataUrl(String dataUrl, String mimeType) {
-                  try {
-                      int comma = dataUrl.indexOf(',');
-                      if (comma == -1) { toast("❌ Invalid data URL"); return; }
-                      String meta = dataUrl.substring(5, comma);
-                      String payload = dataUrl.substring(comma + 1);
-                      boolean isBase64 = meta.contains(";base64");
-                      String mime = meta.split(";")[0];
-                      if (mime.isEmpty()) mime = mimeType;
-                      if (mime == null || mime.isEmpty()) mime = "application/octet-stream";
-                      byte[] data = isBase64 ? Base64.decode(payload, Base64.DEFAULT) : Uri.decode(payload).getBytes("UTF-8");
-                      saveBytes(data, mime);
-                  } catch (Exception e) { toast("❌ Download Failed: " + e.getMessage()); }
-              }
-
-              private String saveBytes(byte[] data, String mimeType) {
-                  try {
-                      String ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType);
-                      if (ext == null) ext = "bin";
-                      String fileName = "download_" + System.currentTimeMillis() + "." + ext;
-                      Uri savedUri = null;
-                      File savedFile = null;
-
-                      if (Build.VERSION.SDK_INT >= 29) {
-                          ContentValues values = new ContentValues();
-                          values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
-                          values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
-                          values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-                          Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                          if (uri == null) throw new Exception("Could not create file");
-                          OutputStream os = getContentResolver().openOutputStream(uri);
-                          os.write(data); os.close(); savedUri = uri;
-                      } else {
-                          File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                          if (!dir.exists()) dir.mkdirs();
-                          File out = new File(dir, fileName);
-                          FileOutputStream fos = new FileOutputStream(out);
-                          fos.write(data); fos.close(); savedFile = out;
-                      }
-
-                      showDownloadNotification(fileName, savedUri, savedFile, mimeType);
-                      String path = (savedFile != null) ? savedFile.getAbsolutePath() : "Downloads/" + fileName;
-                      toast("✅ Downloaded\n📂 " + path);
-                      openFile(savedUri, savedFile, mimeType, fileName);
-                      return fileName;
-                  } catch (Exception e) {
-                      toast("❌ Save Failed: " + e.toString());
-                      return null;
-                  }
-              }
-
-              private void showDownloadNotification(String fileName, Uri savedUri, File savedFile, String mimeType) {
-                  try {
-                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                      if (nm == null) return;
-                      Intent openIntent = buildOpenIntent(savedUri, savedFile, mimeType, fileName);
-                      PendingIntent pi = null;
-                      if (openIntent != null) pi = PendingIntent.getActivity(this, (int) System.currentTimeMillis(), openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-                      NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID_DOWNLOAD)
-                          .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                          .setContentTitle("✅ Downloaded").setContentText(fileName + " — Tap to open")
-                          .setAutoCancel(true).setPriority(NotificationCompat.PRIORITY_DEFAULT);
-                      if (pi != null) b.setContentIntent(pi);
-                      nm.notify(NOTIF_ID, b.build());
-                  } catch (Exception e) {}
-              }
-
-              private Intent buildOpenIntent(Uri savedUri, File savedFile, String mimeType, String fileName) {
-                  try {
-                      Uri uri = savedUri != null ? savedUri : (savedFile != null ? FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", savedFile) : null);
-                      if (uri == null) return null;
-                      Intent intent = new Intent(Intent.ACTION_VIEW);
-                      intent.setDataAndType(uri, mimeType);
-                      intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                      return intent;
-                  } catch (Exception e) { return null; }
-              }
-
-              private void openFile(Uri savedUri, File savedFile, String mimeType, String fileName) {
-                  try {
-                      Intent intent = buildOpenIntent(savedUri, savedFile, mimeType, fileName);
-                      if (intent != null) startActivity(Intent.createChooser(intent, "Open file with..."));
-                  } catch (Exception e) { toast("No app found to open this file."); }
-              }
-
-              private void toast(final String msg) {
-                  runOnUiThread(new Runnable() {
-                      @Override
-                      public void run() { Toast.makeText(getApplicationContext(), msg, Toast.LENGTH_LONG).show(); }
-                  });
-              }
-
-              public class WebAppInterface {
-                  @JavascriptInterface
-                  public void saveBase64(String base64Data, String mimeType) {
-                      try { saveBytes(Base64.decode(base64Data, Base64.DEFAULT), mimeType); } 
-                      catch (Exception e) { toast("❌ Save failed: " + e.toString()); }
-                  }
-                  @JavascriptInterface
-                  public void saveError(String msg) { toast("❌ Error: " + msg); }
-                  
-                  @JavascriptInterface
-                  public void showExternalNotification(String title, String body) {
-                      runOnUiThread(new Runnable() {
-                          @Override
-                          public void run() { showPushNotification(title, body); }
-                      });
-                  }
-
-                  @JavascriptInterface
-                  public void retryConnection() {
-                      runOnUiThread(new Runnable() {
-                          @Override
-                          public void run() {
-                              if ("__SRC__".equals("url")) {
-                                  webView.loadUrl("__URL__");
-                              } else {
-                                  File indexFile = findFile(new File(getFilesDir(), "app_web"), "index.html");
-                                  if (indexFile != null) webView.loadUrl("file://" + indexFile.getAbsolutePath());
-                              }
-                          }
-                      });
-                  }
-
-                  // 🌟 الدالة الأولى: ربط المستخدم بـ OneSignal
-                  @JavascriptInterface
-                  public void setExternalUserId(final String id) {
-                      runOnUiThread(new Runnable() {
-                          @Override
-                          public void run() {
-                              OneSignal.setExternalUserId(id);
-                              toast("✅ Linked ID: " + id);
-                          }
-                      });
-                  }
-
-                  // 🌟 الدالة الثانية: فصل المستخدم من OneSignal (عند تسجيل الخروج)
-                  @JavascriptInterface
-                  public void clearExternalUserId() {
-                      runOnUiThread(new Runnable() {
-                          @Override
-                          public void run() {
-                              OneSignal.removeExternalUserId();
-                              toast("✅ Unlinked ID");
-                          }
-                      });
                   }
               }
 
@@ -840,11 +329,9 @@ jobs:
           JAVAEOF
 
           sed -i "s/__PKG__/$PKG_NAME/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
-          sed -i "s|__URL__|$WEBSITE|g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
-          sed -i "s/__SRC__/$SRC_TYPE/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
           sed -i "s/__OS_APP_ID__/$OS_APP_ID/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
 
-          printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar"/>\n</resources>\n' > "$PROJECT/app/src/main/res/values/styles.xml"
+          printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">\n        <item name="android:windowLightStatusBar">false</item>\n        <item name="android:statusBarColor">#0b0e14</item>\n        <item name="android:navigationBarColor">#0b0e14</item>\n    </style>\n</resources>\n' > "$PROJECT/app/src/main/res/values/styles.xml"
 
           echo "✅ Project Created Successfully"
 
@@ -854,24 +341,12 @@ jobs:
           gradle assembleDebug --no-daemon 2>&1 | tee build.log
           EXIT_CODE=${PIPESTATUS[0]}
           if [ $EXIT_CODE -ne 0 ]; then
-            echo ""
             echo "=========================================="
-            echo "❌ Build Failed! (Gradle Error):"
+            echo "❌ Build Failed!"
             echo "=========================================="
             grep -B 2 -A 20 -i "What went wrong" build.log || true
-            echo ""
-            echo "=========================================="
-            echo "📄 Details (Java/XML):"
-            echo "=========================================="
-            grep -B 2 -A 5 -i "error:" build.log || true
-            echo "=========================================="
             exit 1
           fi
-
-      - name: Find APK
-        if: always()
-        run: |
-          find /tmp/app -name "*.apk" -type f 2>/dev/null || echo "No APK Found"
 
       - name: Upload APK
         if: success()
