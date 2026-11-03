@@ -7,15 +7,13 @@ on:
         description: 'اسم الحزمة (مثال: com.my.pyide)'
         required: true
         default: 'com.pyide.app'
+      app_name:
+        description: 'اسم التطبيق'
+        required: true
+        default: 'PyIDE Pro'
 
 permissions:
   contents: read
-
-env:
-  # ==========================================
-  # ✏️ عدل من هنا: اسم التطبيق
-  APP_NAME: "PyIDE Pro" 
-  # ==========================================
 
 jobs:
   build:
@@ -54,22 +52,30 @@ jobs:
       - name: Create Android Project
         env:
           PKG_NAME: ${{ inputs.package_name }}
+          APP_NAME: ${{ inputs.app_name }}
         run: |
           set -e
           PROJECT=/tmp/app
+
+          # 0. التحقق من اسم الحزمة
+          if ! echo "$PKG_NAME" | grep -Eq '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'; then
+            echo "Invalid package name: $PKG_NAME (example: com.my.pyide)"; exit 1
+          fi
+          APP_CLEAN=$(printf '%s' "$APP_NAME" | sed 's/[&<>"'\''\\]//g')
+          [ -z "$APP_CLEAN" ] && APP_CLEAN="PyIDE"
           PKG_PATH=$(echo "$PKG_NAME" | tr '.' '/')
 
-          # 1. إنشاء المجلدات الأساسية
+          # 1. المجلدات الأساسية
           mkdir -p "$PROJECT/app/src/main/java/$PKG_PATH"
           mkdir -p "$PROJECT/app/src/main/res/values"
-          mkdir -p "$PROJECT/app/src/main/res/mipmap-hdpi"
-          mkdir -p "$PROJECT/app/src/main/assets"
+          mkdir -p "$PROJECT/app/src/main/res/xml"
+          mkdir -p "$PROJECT/app/src/main/res/drawable"
+          mkdir -p "$PROJECT/app/src/main/res/mipmap-anydpi"
+          mkdir -p "$PROJECT/app/src/main/res/mipmap-anydpi-v26"
+          mkdir -p "$PROJECT/app/src/main/assets/lib"
           mkdir -p "$PROJECT/app/src/main/python"
 
-          # 2. تحميل صورة بايثون الافتراضية
-          curl -L --fail -o /tmp/icon.png "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.png" || true
-
-          # 3. إعدادات Gradle (تم إصلاح المستودعات هنا)
+          # 2. إعدادات Gradle
           cat > "$PROJECT/settings.gradle" << 'EOF'
           pluginManagement {
               repositories {
@@ -104,11 +110,10 @@ jobs:
           }
           EOF
 
-          # 4. تفعيل دعم AndroidX (حل جذري للمشكلة)
           cat > "$PROJECT/gradle.properties" << 'EOF'
           android.useAndroidX=true
           android.enableJetifier=true
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
           EOF
 
           cat > "$PROJECT/app/build.gradle" << 'EOF'
@@ -120,8 +125,8 @@ jobs:
                   applicationId "PKG_NAME_PLACEHOLDER"
                   minSdk 24
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 2
+                  versionName "2.0"
                   ndk { abiFilters "arm64-v8a", "x86_64" }
                   python {
                       version "3.11"
@@ -136,6 +141,9 @@ jobs:
                           install "telethon"
                           install "pycryptodome"
                           install "pillow"
+                          install "rich"
+                          install "colorama"
+                          install "tqdm"
                           install "pip"
                       }
                   }
@@ -145,133 +153,560 @@ jobs:
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.core:core:1.12.0'
-              implementation 'androidx.webkit:webkit:1.10.0'
           }
           EOF
           sed -i "s/PKG_NAME_PLACEHOLDER/$PKG_NAME/g" "$PROJECT/app/build.gradle"
 
-          # 5. كود البايثون الأساسي (Backend)
+          # 3. الموارد (اسم التطبيق، الثيم، الأيقونة - بدون تحميل من الإنترنت)
+          cat > "$PROJECT/app/src/main/res/values/strings.xml" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">$APP_CLEAN</string>
+          </resources>
+          EOF
+
+          cat > "$PROJECT/app/src/main/res/values/colors.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_bg">#0D1117</color>
+          </resources>
+          EOF
+
+          cat > "$PROJECT/app/src/main/res/values/styles.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
+                  <item name="android:windowBackground">#0D1117</item>
+                  <item name="android:statusBarColor">#161B22</item>
+                  <item name="android:navigationBarColor">#0D1117</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > "$PROJECT/app/src/main/res/xml/file_paths.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <cache-path name="cache" path="." />
+          </paths>
+          EOF
+
+          cat > "$PROJECT/app/src/main/res/drawable/ic_launcher_fg.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#3776AB" android:pathData="M36,30 H58 A8,8 0 0 1 66,38 V52 H44 A8,8 0 0 0 36,60 Z"/>
+              <path android:fillColor="#FFD43B" android:pathData="M72,78 H50 A8,8 0 0 1 42,70 V56 H64 A8,8 0 0 0 72,48 Z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M50,38m-2,0a2,2 0 1,0 4,0a2,2 0 1,0 -4,0"/>
+              <path android:fillColor="#3776AB" android:pathData="M58,70m-2,0a2,2 0 1,0 4,0a2,2 0 1,0 -4,0"/>
+          </vector>
+          EOF
+
+          cat > "$PROJECT/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_bg"/>
+              <foreground android:drawable="@drawable/ic_launcher_fg"/>
+          </adaptive-icon>
+          EOF
+
+          cat > "$PROJECT/app/src/main/res/mipmap-anydpi/ic_launcher.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:drawable="@color/ic_bg"/>
+              <item android:drawable="@drawable/ic_launcher_fg"/>
+          </layer-list>
+          EOF
+
+          # 4. Manifest
+          cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
+              <application
+                  android:allowBackup="false"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="@string/app_name"
+                  android:theme="@style/AppTheme"
+                  android:largeHeap="true"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:windowSoftInputMode="adjustResize"
+                      android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|uiMode|locale|layoutDirection">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".PythonService" android:exported="false" android:foregroundServiceType="dataSync"/>
+                  <provider
+                      android:name="androidx.core.content.FileProvider"
+                      android:authorities="$PKG_NAME.fileprovider"
+                      android:exported="false"
+                      android:grantUriPermissions="true">
+                      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths"/>
+                  </provider>
+              </application>
+          </manifest>
+          EOF
+
+          # 5. مكتبات المحرر (محلية داخل التطبيق ليعمل بدون إنترنت)
+          LIB="$PROJECT/app/src/main/assets/lib"
+          CM=https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16
+          for f in codemirror.min.js codemirror.min.css theme/material-darker.min.css \
+                   mode/python/python.min.js mode/javascript/javascript.min.js mode/xml/xml.min.js \
+                   mode/css/css.min.js mode/htmlmixed/htmlmixed.min.js mode/markdown/markdown.min.js \
+                   mode/shell/shell.min.js addon/search/searchcursor.min.js addon/edit/closebrackets.min.js \
+                   addon/edit/matchbrackets.min.js addon/selection/active-line.min.js addon/comment/comment.min.js; do
+            curl -fsSL --retry 3 "$CM/$f" -o "$LIB/$(basename "$f")"
+          done
+
+          # 6. كود البايثون (Backend)
           cat > "$PROJECT/app/src/main/python/runner.py" << 'PYEOF'
-          import os, sys, json, zipfile, shutil, runpy, traceback, io, base64, subprocess
+          import os, sys, json, zipfile, shutil, runpy, traceback, base64, threading, queue, ctypes, subprocess, time, shlex, ast, importlib
 
           WORK_DIR = ""
+          LIBS_DIR = ""
           LOG_FILE = ""
+          CFG_FILE = ""
           MAIN_SCRIPT = "main.py"
 
-          def init_env(w_dir, l_file):
-              global WORK_DIR, LOG_FILE
-              WORK_DIR = w_dir
-              LOG_FILE = l_file
-              os.makedirs(WORK_DIR, exist_ok=True)
-              sys.stdout = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
-              sys.stderr = sys.stdout
-              print("> System Initialized (Python 3.11 + Pip)")
+          _inited = False
+          _running = False
+          _run_tid = None
+          _stdin_q = queue.Queue()
+          _repl_ns = {"__name__": "__console__"}
 
-          def set_main_script(name):
-              global MAIN_SCRIPT
-              MAIN_SCRIPT = name
+          _SHELL_CMDS = {
+              "ls", "pwd", "cat", "echo", "mkdir", "rm", "cp", "mv", "touch", "head", "tail",
+              "wc", "grep", "find", "du", "df", "env", "date", "uname", "id", "whoami", "ps",
+              "ping", "stat", "chmod", "which", "getprop", "netstat",
+          }
+
+          SAMPLE_MAIN = '''# مرحباً بك في PyIDE! 👋
+          import sys, platform
+
+          name = input("What's your name? ")
+          print(f"Hello {name}!")
+          print("Python", sys.version.split()[0], "on", platform.machine())
+
+          try:
+              import numpy as np
+              print("numpy:", np.arange(6) ** 2)
+          except ImportError:
+              pass
+          '''
+
+          SAMPLE_SERVER = '''# مثال سيرفر Flask - شغّله ثم افتح "معاينة" من الطرفية
+          from flask import Flask
+
+          app = Flask(__name__)
+
+          @app.route("/")
+          def home():
+              return "<h1>Hello from PyIDE 🐍</h1>"
+
+          if __name__ == "__main__":
+              app.run(host="127.0.0.1", port=5000)
+          '''
+
+
+          class _QStdin:
+              """stdin يقرأ من الطرفية داخل التطبيق (يدعم input())"""
+              encoding = "utf-8"
+
+              def readline(self, size=-1):
+                  line = _stdin_q.get()
+                  return "" if line is None else line
+
+              def read(self, size=-1):
+                  return self.readline()
+
+              def isatty(self):
+                  return False
+
+              def __iter__(self):
+                  return self
+
+              def __next__(self):
+                  line = self.readline()
+                  if not line:
+                      raise StopIteration
+                  return line
+
+
+          def _safe(rel):
+              root = os.path.realpath(WORK_DIR)
+              p = os.path.realpath(os.path.join(WORK_DIR, rel))
+              if p != root and not p.startswith(root + os.sep):
+                  raise ValueError("Path outside workspace")
+              return p
+
+
+          def _save_cfg():
+              try:
+                  with open(CFG_FILE, "w", encoding="utf-8") as f:
+                      json.dump({"main": MAIN_SCRIPT}, f)
+              except Exception:
+                  pass
+
+
+          def init_env(w_dir, l_file):
+              global WORK_DIR, LIBS_DIR, LOG_FILE, CFG_FILE, MAIN_SCRIPT, _inited
+              if _inited:
+                  return "OK"
+              _inited = True
+              base = os.path.dirname(w_dir)
+              WORK_DIR, LOG_FILE = w_dir, l_file
+              LIBS_DIR = os.path.join(base, "pylibs")
+              CFG_FILE = os.path.join(base, "ide_config.json")
+              os.makedirs(WORK_DIR, exist_ok=True)
+              os.makedirs(LIBS_DIR, exist_ok=True)
+              os.environ.update({
+                  "PYTHONUNBUFFERED": "1",
+                  "PYTHONIOENCODING": "utf-8",
+                  "HOME": base,
+                  "PIP_NO_CACHE_DIR": "1",
+                  "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+              })
+              for p in (LIBS_DIR, WORK_DIR):
+                  if p not in sys.path:
+                      sys.path.insert(0, p)
+              try:
+                  with open(CFG_FILE, encoding="utf-8") as f:
+                      MAIN_SCRIPT = json.load(f).get("main", "main.py")
+              except Exception:
+                  pass
+              sys.stdout = open(LOG_FILE, "w", encoding="utf-8", buffering=1)
+              sys.stderr = sys.stdout
+              sys.stdin = _QStdin()
+              os.chdir(WORK_DIR)
+              if not os.listdir(WORK_DIR):
+                  for n, c in (("main.py", SAMPLE_MAIN), ("web_server.py", SAMPLE_SERVER)):
+                      with open(os.path.join(WORK_DIR, n), "w", encoding="utf-8") as f:
+                          f.write(c)
+              print("> PyIDE ready - Python " + sys.version.split()[0])
               return "OK"
 
-          def get_main_script():
-              return MAIN_SCRIPT
 
-          def list_files():
+          def get_info(_=None):
+              return json.dumps({"python": sys.version.split()[0], "workspace": WORK_DIR})
+
+
+          # ---------------- الملفات ----------------
+          def list_files(_=None):
               res = []
               for root, dirs, files in os.walk(WORK_DIR):
+                  dirs[:] = sorted(d for d in dirs if d != "__pycache__")
                   for d in dirs:
-                      p = os.path.relpath(os.path.join(root, d), WORK_DIR)
-                      res.append({"name": d, "path": p, "isDir": True})
-                  for f in files:
-                      p = os.path.relpath(os.path.join(root, f), WORK_DIR)
-                      res.append({"name": f, "path": p, "isDir": False})
+                      rel = os.path.relpath(os.path.join(root, d), WORK_DIR).replace(os.sep, "/")
+                      res.append({"name": d, "path": rel, "isDir": True})
+                  for f in sorted(files):
+                      rel = os.path.relpath(os.path.join(root, f), WORK_DIR).replace(os.sep, "/")
+                      res.append({"name": f, "path": rel, "isDir": False})
               return json.dumps(res)
 
+
           def read_file(path):
-              p = os.path.join(WORK_DIR, path)
-              if not os.path.exists(p): return ""
-              with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                  return f.read()
+              p = _safe(path)
+              if not os.path.isfile(p):
+                  return ""
+              with open(p, "rb") as f:
+                  data = f.read()
+              if b"\0" in data[:4096]:
+                  return "\x00BINARY"
+              return data.decode("utf-8", errors="replace")
+
 
           def write_file(data_json):
               data = json.loads(data_json)
-              p = os.path.join(WORK_DIR, data['path'])
-              os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None
-              with open(p, "w", encoding="utf-8") as f:
-                  f.write(data['content'])
+              p = _safe(data["path"])
+              d = os.path.dirname(p)
+              if d:
+                  os.makedirs(d, exist_ok=True)
+              with open(p, "w", encoding="utf-8", newline="\n") as f:
+                  f.write(data["content"])
               return "OK"
 
+
           def write_binary(base64_data, file_name):
-              p = os.path.join(WORK_DIR, file_name)
+              p = _safe(file_name)
+              d = os.path.dirname(p)
+              if d:
+                  os.makedirs(d, exist_ok=True)
               with open(p, "wb") as f:
                   f.write(base64.b64decode(base64_data))
               return "OK"
 
+
           def delete_item(path):
-              p = os.path.join(WORK_DIR, path)
-              if os.path.isdir(p): shutil.rmtree(p)
-              elif os.path.exists(p): os.remove(p)
+              p = _safe(path)
+              if p == os.path.realpath(WORK_DIR):
+                  return "ERR"
+              if os.path.isdir(p):
+                  shutil.rmtree(p)
+              elif os.path.exists(p):
+                  os.remove(p)
               return "OK"
+
 
           def make_dir(path):
-              p = os.path.join(WORK_DIR, path)
-              os.makedirs(p, exist_ok=True)
+              os.makedirs(_safe(path), exist_ok=True)
               return "OK"
+
+
+          def rename_item(data_json):
+              d = json.loads(data_json)
+              src, dst = _safe(d["from"]), _safe(d["to"])
+              if os.path.exists(dst):
+                  return "EXISTS"
+              os.makedirs(os.path.dirname(dst), exist_ok=True)
+              shutil.move(src, dst)
+              return "OK"
+
 
           def unzip_file(path):
-              p = os.path.join(WORK_DIR, path)
-              with zipfile.ZipFile(p, 'r') as z:
-                  z.extractall(WORK_DIR)
+              p = _safe(path)
+              target_dir = os.path.dirname(p)
+              with zipfile.ZipFile(p, "r") as z:
+                  root = os.path.realpath(WORK_DIR)
+                  for m in z.namelist():
+                      t = os.path.realpath(os.path.join(target_dir, m))
+                      if not t.startswith(root + os.sep) and t != root:
+                          raise ValueError("Unsafe zip entry: " + m)
+                  z.extractall(target_dir)
               return "OK"
 
-          def run_server():
-              print(f"> Starting {MAIN_SCRIPT}...")
-              target = os.path.join(WORK_DIR, MAIN_SCRIPT)
-              if not os.path.exists(target):
-                  print(f"❌ Error: {MAIN_SCRIPT} not found!")
-                  return
-              os.chdir(WORK_DIR)
-              sys.argv = [target]
-              try:
-                  runpy.run_path(target, run_name='__main__')
-              except Exception:
-                  traceback.print_exc()
 
+          def set_main_script(name):
+              global MAIN_SCRIPT
+              MAIN_SCRIPT = name.strip() or "main.py"
+              _save_cfg()
+              return "OK"
+
+
+          def get_main_script(_=None):
+              return MAIN_SCRIPT
+
+
+          # ---------------- التشغيل ----------------
+          def get_status(_=None):
+              return "1" if _running else "0"
+
+
+          def _cleanup_modules(before):
+              root = os.path.realpath(WORK_DIR) + os.sep
+              for name in list(sys.modules):
+                  if name in before:
+                      continue
+                  f = getattr(sys.modules.get(name), "__file__", None)
+                  try:
+                      if f and os.path.realpath(f).startswith(root):
+                          sys.modules.pop(name, None)
+                  except Exception:
+                      pass
+
+
+          def _execute(target, label):
+              global _running, _run_tid
+              if _running:
+                  print("> Already running")
+                  return
+              if not os.path.isfile(target):
+                  print("✖ " + label + " not found!")
+                  return
+              _running = True
+              _run_tid = threading.get_ident()
+              while not _stdin_q.empty():
+                  try:
+                      _stdin_q.get_nowait()
+                  except Exception:
+                      break
+              before = set(sys.modules)
+              importlib.invalidate_caches()
+              print("▶ Running " + label + " ...")
+              t0 = time.time()
+              try:
+                  os.chdir(WORK_DIR)
+                  sys.argv = [target]
+                  runpy.run_path(target, run_name="__main__")
+                  print("\n✔ Finished in %.1fs" % (time.time() - t0))
+              except SystemExit as e:
+                  if e.code in (None, 0):
+                      print("\n■ Exited")
+                  else:
+                      print("\n■ Exited (code %s)" % (e.code,))
+              except BaseException:
+                  traceback.print_exc()
+                  print("\n✖ Script crashed")
+              finally:
+                  _running = False
+                  _run_tid = None
+                  _cleanup_modules(before)
+
+
+          def run_server(_=None):
+              try:
+                  target = _safe(MAIN_SCRIPT)
+              except Exception as e:
+                  print("✖ " + str(e))
+                  return ""
+              _execute(target, MAIN_SCRIPT)
+              return ""
+
+
+          def stop_server(_=None):
+              if not _running or _run_tid is None:
+                  return "0"
+              _stdin_q.put(None)
+              r = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(_run_tid), ctypes.py_object(SystemExit))
+              return "1" if r == 1 else "0"
+
+
+          def send_input(text):
+              sys.stdout.write(text + "\n")
+              _stdin_q.put(text + "\n")
+              return "OK"
+
+
+          # ---------------- الطرفية ----------------
           def exec_python(code):
               try:
-                  local_vars = {}
-                  exec(code, globals(), local_vars)
-                  return "OK"
-              except Exception as e:
-                  return f"Error: {e}"
+                  try:
+                      tree = ast.parse(code, mode="eval")
+                  except SyntaxError:
+                      tree = None
+                  if tree is not None:
+                      val = eval(compile(tree, "<console>", "eval"), _repl_ns)
+                      if val is not None:
+                          print(repr(val))
+                  else:
+                      exec(compile(code, "<console>", "exec"), _repl_ns)
+              except BaseException:
+                  traceback.print_exc()
+              return ""
+
 
           def exec_system(cmd):
               try:
-                  result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORK_DIR)
-                  output = result.stdout + result.stderr
-                  return output if output else "OK"
+                  r = subprocess.run(["/system/bin/sh", "-c", cmd], capture_output=True, text=True,
+                                     errors="replace", timeout=120, cwd=os.getcwd())
+                  out = (r.stdout or "") + (r.stderr or "")
+                  print(out.rstrip("\n") if out.strip() else "(exit %d)" % r.returncode)
+              except subprocess.TimeoutExpired:
+                  print("✖ timeout (120s)")
               except Exception as e:
-                  return f"System Error: {e}"
+                  print("✖ " + str(e))
+              return ""
 
-          def install_pip_package(package_name):
+
+          def _norm(n):
+              return n.lower().replace("-", "_").replace(".", "_")
+
+
+          def _pip_list():
+              names = sorted(e[:-10] for e in os.listdir(LIBS_DIR) if e.endswith(".dist-info"))
+              print("\n".join(names) if names else "(no extra packages installed)")
+
+
+          def _pip_uninstall(pkgs):
+              for pkg in pkgs:
+                  n = _norm(pkg)
+                  found = False
+                  for e in os.listdir(LIBS_DIR):
+                      base = _norm(e.split("-")[0]) if e.endswith(".dist-info") else _norm(e[:-3] if e.endswith(".py") else e)
+                      if base == n:
+                          p = os.path.join(LIBS_DIR, e)
+                          shutil.rmtree(p) if os.path.isdir(p) else os.remove(p)
+                          found = True
+                  print(("✔ removed " if found else "✖ not found: ") + pkg)
+
+
+          def pip_cmd(args):
+              if not args:
+                  print("usage: pip install <pkg> | pip uninstall <pkg> | pip list")
+                  return
+              if args[0] == "list":
+                  return _pip_list()
+              if args[0] == "uninstall":
+                  return _pip_uninstall([a for a in args[1:] if not a.startswith("-")])
+              if args[0] == "install":
+                  args = args + ["--target", LIBS_DIR, "--upgrade", "--prefer-binary", "--no-input"]
               try:
-                  import pip
-                  old_stdout = sys.stdout
-                  sys.stdout = mystdout = io.StringIO()
-                  pip.main(['install', package_name])
-                  sys.stdout = old_stdout
-                  return f"Output:\n{mystdout.getvalue()}"
+                  from pip._internal.cli.main import main as pip_main
               except Exception as e:
-                  return f"Pip Error: {e}"
+                  print("✖ pip not available: " + str(e))
+                  return
+              try:
+                  code = pip_main(args)
+                  print("✔ pip done" if code == 0 else "✖ pip failed (code %s) - native packages must be pre-built for Android" % code)
+              except SystemExit:
+                  pass
+              except BaseException:
+                  traceback.print_exc()
+
+
+          def terminal(line):
+              s = line.strip()
+              print(">>> " + s)
+              try:
+                  parts = shlex.split(s)
+              except ValueError:
+                  parts = s.split()
+              head = parts[0] if parts else ""
+              try:
+                  if head in ("pip", "pip3"):
+                      pip_cmd(parts[1:])
+                  elif parts[:3] in (["python", "-m", "pip"], ["python3", "-m", "pip"]):
+                      pip_cmd(parts[3:])
+                  elif head in ("python", "python3") and len(parts) > 1 and parts[1].endswith(".py"):
+                      _execute(_safe(parts[1]), parts[1])
+                  elif head == "cd":
+                      os.chdir(_safe(parts[1]) if len(parts) > 1 else WORK_DIR)
+                      print(os.getcwd())
+                  elif head in _SHELL_CMDS:
+                      exec_system(s)
+                  else:
+                      exec_python(s)
+              except BaseException:
+                  traceback.print_exc()
+              return ""
+
+
+          def list_libs(_=None):
+              return json.dumps(sorted(e[:-10] for e in os.listdir(LIBS_DIR) if e.endswith(".dist-info")))
           PYEOF
 
-          # 6. خدمات الجافا (Foreground Service + Bridge)
+          # 7. خدمة الخلفية + النشاط الرئيسي (الجسر)
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/PythonService.java" << 'JAVAEOF'
           package __PKG__;
-          import android.app.*; import android.content.Intent; import android.os.Build; import android.os.IBinder;
-          import androidx.core.app.NotificationCompat; import com.chaquo.python.Python; import com.chaquo.python.android.AndroidPlatform;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.content.pm.ServiceInfo;
+          import android.os.Build;
+          import android.os.IBinder;
+          import android.os.PowerManager;
+          import androidx.core.app.NotificationCompat;
+          import com.chaquo.python.Python;
+          import com.chaquo.python.android.AndroidPlatform;
 
           public class PythonService extends Service {
               private static final String CHANNEL_ID = "py_service";
+              private PowerManager.WakeLock wakeLock;
+              private volatile boolean busy = false;
+
               @Override public void onCreate() {
                   super.onCreate();
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -279,74 +714,246 @@ jobs:
                       getSystemService(NotificationManager.class).createNotificationChannel(ch);
                   }
               }
+
               @Override public int onStartCommand(Intent intent, int flags, int startId) {
+                  Intent open = new Intent(this, MainActivity.class);
+                  open.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                  PendingIntent pi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
                   Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
-                          .setContentTitle("Python IDE is Running").setContentText("Script executing in background")
-                          .setSmallIcon(android.R.drawable.ic_media_play).setOngoing(true).build();
-                  startForeground(1, notif);
-                  new Thread(() -> {
+                          .setContentTitle("Python IDE is running")
+                          .setContentText("Your script is running in the background")
+                          .setSmallIcon(android.R.drawable.ic_media_play)
+                          .setContentIntent(pi)
+                          .setOngoing(true)
+                          .build();
+                  if (Build.VERSION.SDK_INT >= 29) {
+                      startForeground(1, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                  } else {
+                      startForeground(1, notif);
+                  }
+
+                  if (!busy) {
+                      busy = true;
                       try {
-                          if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
-                          Python.getInstance().getModule("runner").callAttr("run_server");
-                      } catch (Exception e) {}
-                  }).start();
-                  return START_STICKY;
+                          PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                          wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pyide:run");
+                          wakeLock.acquire(6 * 60 * 60 * 1000L);
+                      } catch (Exception ignored) {}
+                      new Thread(() -> {
+                          try {
+                              if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
+                              Python.getInstance().getModule("runner").callAttr("run_server", "");
+                          } catch (Throwable ignored) {
+                          } finally {
+                              busy = false;
+                              try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
+                              stopForeground(true);
+                              stopSelf();
+                          }
+                      }, "py-runner").start();
+                  }
+                  return START_NOT_STICKY;
               }
+
+              @Override public void onDestroy() {
+                  try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignored) {}
+                  super.onDestroy();
+              }
+
               @Override public IBinder onBind(Intent intent) { return null; }
           }
           JAVAEOF
 
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" << 'JAVAEOF'
           package __PKG__;
-          import android.content.Intent; import android.os.Build; import android.os.Bundle;
-          import android.webkit.*; import androidx.appcompat.app.AppCompatActivity;
-          import com.chaquo.python.PyObject; import com.chaquo.python.Python; import com.chaquo.python.android.AndroidPlatform;
-          import java.io.*;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Process;
+          import android.util.Base64;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.activity.OnBackPressedCallback;
+          import androidx.activity.result.ActivityResultLauncher;
+          import androidx.activity.result.contract.ActivityResultContracts;
+          import androidx.appcompat.app.AppCompatActivity;
+          import androidx.core.content.FileProvider;
+          import com.chaquo.python.PyObject;
+          import com.chaquo.python.Python;
+          import com.chaquo.python.android.AndroidPlatform;
+          import java.io.File;
+          import java.io.FileInputStream;
+          import java.io.FileOutputStream;
+          import java.io.IOException;
+          import java.io.RandomAccessFile;
+          import java.nio.charset.StandardCharsets;
+          import java.util.zip.ZipEntry;
+          import java.util.zip.ZipOutputStream;
 
           public class MainActivity extends AppCompatActivity {
               private WebView webView;
-              private Python py;
+              private PyObject runner;
+              private ValueCallback<Uri[]> fileCallback;
+              private ActivityResultLauncher<Intent> chooser;
 
               @Override protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
-                  py = Python.getInstance();
-                  
-                  String workDir = getFilesDir().getAbsolutePath() + "/workspace";
-                  String logFile = getFilesDir().getAbsolutePath() + "/server.log";
-                  py.getModule("runner").callAttr("init_env", workDir, logFile);
+                  runner = Python.getInstance().getModule("runner");
+
+                  File base = getFilesDir();
+                  runner.callAttr("init_env",
+                          new File(base, "workspace").getAbsolutePath(),
+                          new File(base, "server.log").getAbsolutePath());
+
+                  getWindow().setStatusBarColor(0xFF161b22);
+                  getWindow().setNavigationBarColor(0xFF0d1117);
+
+                  chooser = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), res -> {
+                      if (fileCallback != null) {
+                          fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res.getResultCode(), res.getData()));
+                          fileCallback = null;
+                      }
+                  });
 
                   webView = new WebView(this);
+                  webView.setBackgroundColor(0xFF0d1117);
                   setContentView(webView);
+
                   WebSettings s = webView.getSettings();
-                  s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
-                  s.setAllowFileAccess(true); s.setAllowFileAccessFromFileURLs(true); s.setAllowUniversalAccessFromFileURLs(true);
-                  
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setAllowFileAccess(false);
+                  s.setAllowFileAccessFromFileURLs(false);
+                  s.setAllowUniversalAccessFromFileURLs(false);
+                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+                  webView.setWebViewClient(new WebViewClient() {
+                      @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                          String u = r.getUrl().toString();
+                          if (u.startsWith("file:///android_asset/")) return false;
+                          openExternalUrl(u);
+                          return true;
+                      }
+                  });
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override public boolean onShowFileChooser(WebView w, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                          if (fileCallback != null) fileCallback.onReceiveValue(null);
+                          fileCallback = cb;
+                          Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                          i.addCategory(Intent.CATEGORY_OPENABLE);
+                          i.setType("*/*");
+                          i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                          try {
+                              chooser.launch(Intent.createChooser(i, "Select files"));
+                          } catch (Exception e) {
+                              fileCallback = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+
                   webView.addJavascriptInterface(new PythonBridge(), "Android");
                   webView.loadUrl("file:///android_asset/index.html");
+
+                  getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+                      @Override public void handleOnBackPressed() {
+                          webView.evaluateJavascript("window.onBack ? window.onBack() : false", v -> {
+                              if (!"true".equals(v)) moveTaskToBack(true);
+                          });
+                      }
+                  });
+
+                  if (Build.VERSION.SDK_INT >= 33
+                          && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                      requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+                  }
+              }
+
+              private void openExternalUrl(String url) {
+                  try {
+                      Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(i);
+                  } catch (Exception ignored) {}
+              }
+
+              private static String b64(String s) {
+                  return Base64.encodeToString(s.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+              }
+
+              private void reply(String id, String payload, boolean ok) {
+                  final String js = "window.onPyResult('" + id + "','" + b64(payload) + "'," + ok + ")";
+                  webView.post(() -> webView.evaluateJavascript(js, null));
+              }
+
+              private void zipDir(File root, File dir, ZipOutputStream z) throws IOException {
+                  File[] kids = dir.listFiles();
+                  if (kids == null) return;
+                  for (File k : kids) {
+                      if (k.isDirectory()) {
+                          if (k.getName().equals("__pycache__")) continue;
+                          zipDir(root, k, z);
+                      } else {
+                          String rel = root.toURI().relativize(k.toURI()).getPath();
+                          z.putNextEntry(new ZipEntry(rel));
+                          try (FileInputStream in = new FileInputStream(k)) {
+                              byte[] buf = new byte[8192];
+                              int n;
+                              while ((n = in.read(buf)) > 0) z.write(buf, 0, n);
+                          }
+                          z.closeEntry();
+                      }
+                  }
+              }
+
+              private void shareFile(File f, String mime) {
+                  runOnUiThread(() -> {
+                      try {
+                          Uri u = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", f);
+                          Intent i = new Intent(Intent.ACTION_SEND);
+                          i.setType(mime);
+                          i.putExtra(Intent.EXTRA_STREAM, u);
+                          i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                          startActivity(Intent.createChooser(i, "Share"));
+                      } catch (Exception ignored) {}
+                  });
               }
 
               public class PythonBridge {
                   @JavascriptInterface public void callPy(String func, String args, String reqId) {
                       new Thread(() -> {
                           try {
-                              PyObject res = py.getModule("runner").callAttr(func, args);
-                              String out = res != null ? res.toString() : "";
-                              String safe = out.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "");
-                              webView.post(() -> webView.evaluateJavascript("window.onPyResult('" + reqId + "', '" + safe + "')", null));
-                          } catch (Exception e) {
-                              String err = e.getMessage() != null ? e.getMessage().replace("'", "\\'") : "Error";
-                              webView.post(() -> webView.evaluateJavascript("window.onPyResult('" + reqId + "', JSON.stringify({error:'" + err + "'}))", null));
+                              PyObject res = runner.callAttr(func, args);
+                              reply(reqId, res == null ? "" : res.toString(), true);
+                          } catch (Throwable e) {
+                              reply(reqId, String.valueOf(e.getMessage()), false);
                           }
                       }).start();
                   }
-                  
-                  @JavascriptInterface public void callPyBinary(String func, String base64Data, String fileName, String reqId) {
+
+                  @JavascriptInterface public void callPyBinary(String func, String data, String name, String reqId) {
                       new Thread(() -> {
                           try {
-                              PyObject res = py.getModule("runner").callAttr(func, base64Data, fileName);
-                              webView.post(() -> webView.evaluateJavascript("window.onPyResult('" + reqId + "', '" + res.toString() + "')", null));
-                          } catch (Exception e) {}
+                              PyObject res = runner.callAttr(func, data, name);
+                              reply(reqId, res == null ? "" : res.toString(), true);
+                          } catch (Throwable e) {
+                              reply(reqId, String.valueOf(e.getMessage()), false);
+                          }
                       }).start();
                   }
 
@@ -354,329 +961,893 @@ jobs:
                       Intent i = new Intent(MainActivity.this, PythonService.class);
                       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i); else startService(i);
                   }
-                  @JavascriptInterface public void stopServer() { stopService(new Intent(MainActivity.this, PythonService.class)); }
-                  @JavascriptInterface public String getLogs() {
+
+                  /** يرجع "offset:base64" - الجديد فقط من السجل */
+                  @JavascriptInterface public String readLog(String offset) {
                       try {
                           File f = new File(getFilesDir(), "server.log");
-                          if (!f.exists()) return "";
-                          BufferedReader br = new BufferedReader(new FileReader(f));
-                          StringBuilder sb = new StringBuilder(); String line;
-                          while ((line = br.readLine()) != null) sb.append(line).append("\n");
-                          br.close(); return sb.toString();
-                      } catch (Exception e) { return ""; }
+                          if (!f.exists()) return "0:";
+                          long len = f.length();
+                          long off = Long.parseLong(offset);
+                          if (off > len || off < 0) off = 0;
+                          if (len - off > 200000) off = len - 200000;
+                          if (len == off) return len + ":";
+                          try (RandomAccessFile r = new RandomAccessFile(f, "r")) {
+                              r.seek(off);
+                              byte[] buf = new byte[(int) (len - off)];
+                              r.readFully(buf);
+                              return len + ":" + Base64.encodeToString(buf, Base64.NO_WRAP);
+                          }
+                      } catch (Exception e) {
+                          return "0:";
+                      }
                   }
+
                   @JavascriptInterface public void clearLogs() {
-                      try { new FileOutputStream(new File(getFilesDir(), "server.log")).close(); } catch (Exception e) {}
+                      try { new FileOutputStream(new File(getFilesDir(), "server.log")).close(); } catch (Exception ignored) {}
+                  }
+
+                  @JavascriptInterface public void copyText(String text) {
+                      runOnUiThread(() -> {
+                          ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                          cm.setPrimaryClip(ClipData.newPlainText("PyIDE", text));
+                      });
+                  }
+
+                  @JavascriptInterface public void openExternal(String url) { openExternalUrl(url); }
+
+                  @JavascriptInterface public void shareWorkspace() {
+                      new Thread(() -> {
+                          try {
+                              File ws = new File(getFilesDir(), "workspace");
+                              File out = new File(getCacheDir(), "workspace.zip");
+                              try (ZipOutputStream z = new ZipOutputStream(new FileOutputStream(out))) {
+                                  zipDir(ws, ws, z);
+                              }
+                              shareFile(out, "application/zip");
+                          } catch (Exception ignored) {}
+                      }).start();
+                  }
+
+                  @JavascriptInterface public void shareWorkspaceFile(String rel) {
+                      new Thread(() -> {
+                          try {
+                              File ws = new File(getFilesDir(), "workspace").getCanonicalFile();
+                              File src = new File(ws, rel).getCanonicalFile();
+                              if (!src.getPath().startsWith(ws.getPath() + File.separator) || !src.isFile()) return;
+                              File dir = new File(getCacheDir(), "share");
+                              dir.mkdirs();
+                              File dst = new File(dir, src.getName());
+                              try (FileInputStream in = new FileInputStream(src); FileOutputStream out = new FileOutputStream(dst)) {
+                                  byte[] buf = new byte[8192];
+                                  int n;
+                                  while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                              }
+                              shareFile(dst, src.getName().endsWith(".py") ? "text/plain" : "*/*");
+                          } catch (Exception ignored) {}
+                      }).start();
+                  }
+
+                  /** إيقاف قسري للمحرك (للسكربتات العالقة) */
+                  @JavascriptInterface public void restartApp() {
+                      try {
+                          Intent i = getPackageManager().getLaunchIntentForPackage(getPackageName());
+                          if (i != null) {
+                              i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                              PendingIntent pi = PendingIntent.getActivity(MainActivity.this, 7, i,
+                                      PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_CANCEL_CURRENT);
+                              ((AlarmManager) getSystemService(ALARM_SERVICE)).set(AlarmManager.RTC,
+                                      System.currentTimeMillis() + 400, pi);
+                          }
+                      } catch (Exception ignored) {}
+                      stopService(new Intent(MainActivity.this, PythonService.class));
+                      Process.killProcess(Process.myPid());
                   }
               }
           }
           JAVAEOF
 
-          # 7. ملف الـ Manifest
-          cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-              <application android:allowBackup="true" android:icon="@mipmap/ic_launcher" android:label="$APP_NAME" android:usesCleartextTraffic="true" android:theme="@style/Theme.AppCompat.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
-                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-                  </activity>
-                  <service android:name=".PythonService" android:foregroundServiceType="dataSync" />
-              </application>
-          </manifest>
-          EOF
+          sed -i "s/__PKG__/$PKG_NAME/g" "$PROJECT/app/src/main/java/$PKG_PATH/PythonService.java" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
 
-          # 8. واجهة المستخدم (Frontend)
+          # 8. الواجهة (Frontend)
           cat > "$PROJECT/app/src/main/assets/index.html" << 'HTMLEOF'
           <!DOCTYPE html>
           <html lang="ar" dir="ltr">
           <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <title>PyIDE</title>
-            <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;800&family=Fira+Code&display=swap" rel="stylesheet">
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
-            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
-            <style>
-              :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --txt:#c9d1d9; --acc:#58a6ff; --ok:#2ea043; --err:#f85149; }
-              * { box-sizing: border-box; margin: 0; padding: 0; }
-              body { font-family: 'Cairo', sans-serif; background: var(--bg); color: var(--txt); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-              
-              header { background: var(--panel); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
-              .logo { font-weight: 800; font-size: 18px; color: #fff; display: flex; align-items: center; gap: 8px; }
-              .logo span { color: var(--acc); }
-              .actions { display: flex; gap: 8px; }
-              .btn { padding: 8px 16px; border: none; border-radius: 6px; font-weight: 600; font-family: inherit; cursor: pointer; font-size: 13px; transition: 0.2s; }
-              .btn-run { background: var(--ok); color: #fff; }
-              .btn-run:disabled { opacity: 0.5; }
-              .btn-stop { background: var(--err); color: #fff; }
-              
-              .main-layout { flex: 1; display: flex; overflow: hidden; }
-              
-              .sidebar { width: 220px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
-              .side-header { padding: 10px; font-size: 12px; font-weight: 700; color: #8b949e; display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); }
-              .side-header button { background: none; border: none; color: var(--acc); font-size: 16px; cursor: pointer; }
-              #fileList { flex: 1; overflow-y: auto; padding: 8px; }
-              .file-item { padding: 6px 8px; font-family: 'Fira Code', monospace; font-size: 13px; cursor: pointer; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
-              .file-item:hover { background: rgba(255,255,255,0.05); }
-              .file-item.active { background: rgba(88,166,255,0.1); color: var(--acc); }
-              .file-item .del { color: var(--err); font-size: 12px; display: none; }
-              .file-item:hover .del { display: block; }
-              
-              .editor-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-              #editorHost { flex: 1; overflow: hidden; }
-              .CodeMirror { height: 100% !important; font-family: 'Fira Code', monospace !important; font-size: 14px; background: var(--bg) !important; }
-              .CodeMirror-gutters { background: var(--bg) !important; border-right: 1px solid var(--border) !important; }
-              
-              .terminal { height: 35%; background: #000; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
-              .term-header { background: #161b22; padding: 6px 12px; font-size: 12px; color: #8b949e; display: flex; justify-content: space-between; align-items: center; }
-              .term-body { flex: 1; padding: 10px; overflow-y: auto; font-family: 'Fira Code', monospace; font-size: 12px; color: #3fb950; direction: ltr; text-align: left; white-space: pre-wrap; }
-              .term-body .err { color: var(--err); }
-              .term-input { width: 100%; background: #000; border: none; border-top: 1px solid var(--border); color: #fff; padding: 8px 10px; font-family: 'Fira Code', monospace; font-size: 12px; outline: none; }
-              
-              .settings-panel { width: 250px; background: var(--panel); border-left: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 16px; }
-              .settings-panel h3 { font-size: 13px; color: #8b949e; margin-bottom: 6px; }
-              .settings-panel input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; }
-              .settings-panel button { background: var(--acc); color: #000; padding: 8px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; width: 100%; margin-top: 6px; }
-              
-              .lib-tag { background: rgba(88,166,255,0.1); color: var(--acc); border: 1px solid rgba(88,166,255,0.3); padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 11px; display: inline-block; margin: 2px; }
-              
-              .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; z-index: 999; }
-              .modal.on { display: flex; }
-              .modal-content { background: var(--panel); padding: 20px; border-radius: 8px; width: 300px; border: 1px solid var(--border); }
-              .modal-content input { width: 100%; padding: 10px; margin: 10px 0; background: var(--bg); border: 1px solid var(--border); color: #fff; }
-              .modal-content button { width: 100%; padding: 10px; background: var(--ok); border: none; color: #fff; font-weight: bold; cursor: pointer; }
-            </style>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+          <title>PyIDE</title>
+          <link rel="stylesheet" href="lib/codemirror.min.css">
+          <link rel="stylesheet" href="lib/material-darker.min.css">
+          <style>
+          :root{--bg:#0d1117;--panel:#161b22;--panel2:#212a36;--border:#30363d;--txt:#c9d1d9;--mut:#8b949e;--acc:#58a6ff;--ok:#2ea043;--err:#f85149;--warn:#d29922;--term:#010409;--termtxt:#c9d1d9;--fs:14px}
+          [data-theme=light]{--bg:#ffffff;--panel:#f6f8fa;--panel2:#e6ebf1;--border:#d0d7de;--txt:#24292f;--mut:#57606a;--acc:#0969da;--ok:#1a7f37;--err:#cf222e;--warn:#9a6700;--term:#f6f8fa;--termtxt:#24292f}
+          *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+          [hidden]{display:none!important}
+          html,body{height:100%}
+          body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Arabic",sans-serif;background:var(--bg);color:var(--txt);overflow:hidden;font-size:14px}
+          button{font-family:inherit;font-size:inherit;color:inherit;border:none;background:none;cursor:pointer}
+          input,select{font-family:inherit;font-size:14px;color:var(--txt);background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 10px;outline:none;min-width:0}
+          input:focus,select:focus{border-color:var(--acc)}
+          #app{height:100%;display:flex;flex-direction:column}
+          #top{display:flex;align-items:center;gap:2px;padding:6px 8px;background:var(--panel);border-bottom:1px solid var(--border)}
+          .ib{width:38px;height:38px;border-radius:8px;font-size:18px;display:flex;align-items:center;justify-content:center;flex:none}
+          .ib:active,.btn:active{background:var(--panel2)}
+          #title{flex:1;min-width:0;font-weight:700;font-family:ui-monospace,Menlo,monospace;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 4px}
+          #dirty{color:var(--warn);font-style:normal;margin-left:6px}
+          .run{height:38px;padding:0 14px;border-radius:8px;background:var(--ok);color:#fff;font-weight:700;flex:none}
+          .run.stop{background:var(--err)}
+          #body{flex:1;display:flex;min-height:0;position:relative}
+          #drawer{position:absolute;top:0;bottom:0;left:0;width:min(84vw,310px);background:var(--panel);border-right:1px solid var(--border);transform:translateX(-102%);transition:transform .2s;z-index:30;display:flex;flex-direction:column}
+          body.drawer-open #drawer{transform:none}
+          #scrim{position:absolute;top:0;bottom:0;left:0;right:0;background:rgba(0,0,0,.5);z-index:25;display:none}
+          body.drawer-open #scrim{display:block}
+          .dh{display:flex;align-items:center;padding:6px 6px 6px 12px;border-bottom:1px solid var(--border);font-weight:700;font-size:12px;color:var(--mut);text-transform:uppercase}
+          .dh span{flex:1}
+          #tree{flex:1;overflow:auto;padding:6px 0}
+          .row{display:flex;align-items:center;min-height:38px;padding-right:2px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+          .row:active{background:var(--panel2)}
+          .row.active{background:rgba(88,166,255,.15);color:var(--acc)}
+          .row.cur{outline:1px dashed var(--acc);outline-offset:-2px}
+          .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+          .row .mn{width:34px;height:34px;color:var(--mut);font-size:16px}
+          #main{flex:1;display:flex;flex-direction:column;min-width:0}
+          #tabs{display:flex;overflow-x:auto;background:var(--panel);border-bottom:1px solid var(--border);flex:none;scrollbar-width:none}
+          #tabs::-webkit-scrollbar{display:none}
+          .tab{display:flex;align-items:center;gap:2px;padding:0 4px 0 12px;height:34px;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);border-right:1px solid var(--border);flex:none}
+          .tab.active{color:var(--txt);background:var(--bg);box-shadow:inset 0 2px 0 var(--acc)}
+          .tab b{width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;font-weight:400;font-size:15px}
+          .tab i{color:var(--warn);font-style:normal}
+          #findbar{display:flex;flex-wrap:wrap;gap:6px;padding:6px;background:var(--panel);border-bottom:1px solid var(--border);flex:none}
+          #findbar input{flex:1;min-width:110px;padding:7px 9px}
+          .sb{padding:7px 11px;border-radius:8px;background:var(--panel2);font-size:13px}
+          #editorHost{flex:1;min-height:0;position:relative}
+          #empty{position:absolute;top:0;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:center;color:var(--mut);z-index:5;background:var(--bg);text-align:center;padding:20px}
+          .CodeMirror{height:100%!important;font-family:ui-monospace,"Roboto Mono",Menlo,monospace!important;font-size:var(--fs);background:var(--bg)!important;color:var(--txt)}
+          .CodeMirror-gutters{background:var(--bg)!important;border-right:1px solid var(--border)!important}
+          .CodeMirror-activeline-background{background:rgba(127,127,127,.12)!important}
+          #keys{display:flex;overflow-x:auto;gap:4px;padding:4px 6px;background:var(--panel);border-top:1px solid var(--border);flex:none;scrollbar-width:none}
+          #keys::-webkit-scrollbar{display:none}
+          #keys button{min-width:38px;height:34px;padding:0 10px;border-radius:7px;background:var(--panel2);font-family:ui-monospace,Menlo,monospace;font-size:15px;flex:none}
+          #keys button:active{background:var(--acc);color:#000}
+          #term{flex:none;display:flex;flex-direction:column;background:var(--term);border-top:1px solid var(--border)}
+          .s1 #term{height:38%}
+          .s2 #term{height:78%}
+          #thead{display:flex;align-items:center;padding:2px 4px 2px 12px;background:var(--panel);font-size:12px;color:var(--mut);font-weight:700;flex:none;height:36px}
+          #thead .t{flex:1;display:flex;align-items:center;gap:8px}
+          #dot{width:9px;height:9px;border-radius:50%;background:var(--mut)}
+          #dot.on{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+          #thead button{padding:6px 10px;border-radius:7px;font-size:12px;color:var(--txt)}
+          .s0 #tbody{display:none}
+          #tbody{flex:1;display:flex;flex-direction:column;min-height:0}
+          #tout{flex:1;overflow:auto;padding:8px 10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--termtxt);white-space:pre-wrap;word-break:break-word;direction:ltr;text-align:left;user-select:text;-webkit-user-select:text}
+          #tout .e{color:var(--err)}
+          #tout .i{color:var(--acc)}
+          #tin{display:flex;border-top:1px solid var(--border)}
+          #tin input{flex:1;border:none;border-radius:0;background:transparent;font-family:ui-monospace,Menlo,monospace;font-size:13px;direction:ltr}
+          #tin button{width:46px;color:var(--acc);font-size:18px}
+          .overlay{position:fixed;top:0;bottom:0;left:0;right:0;background:var(--bg);z-index:60;display:flex;flex-direction:column}
+          .oh{display:flex;align-items:center;gap:8px;padding:8px;background:var(--panel);border-bottom:1px solid var(--border);font-weight:700}
+          .oh span{flex:1}
+          .ob{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:18px}
+          .sec h4{font-size:12px;color:var(--mut);margin-bottom:8px;text-transform:uppercase}
+          .fr{display:flex;gap:8px;align-items:center}
+          .fr input[type=text]{flex:1}
+          .fr label{flex:1}
+          .btn{padding:9px 14px;border-radius:8px;background:var(--panel2);font-weight:600}
+          .btn.pri{background:var(--acc);color:#000}
+          .btn.dan{background:var(--err);color:#fff}
+          .chips{display:flex;flex-wrap:wrap;gap:6px}
+          .chip{background:rgba(88,166,255,.12);color:var(--acc);border:1px solid rgba(88,166,255,.3);padding:3px 8px;border-radius:6px;font-family:ui-monospace,monospace;font-size:11px}
+          .modal{position:fixed;top:0;bottom:0;left:0;right:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+          .modal.on{display:flex}
+          .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px;width:100%;max-width:360px;display:flex;flex-direction:column;gap:10px}
+          .box h3{font-size:15px}
+          #mBody{color:var(--mut);font-size:13px;word-break:break-word}
+          #mBtns{display:flex;flex-direction:column;gap:6px}
+          #mBtns.row2{flex-direction:row;justify-content:flex-end}
+          #mBtns button{padding:11px 14px;border-radius:8px;background:var(--panel2);font-weight:600;text-align:center}
+          #mBtns button.pri{background:var(--acc);color:#000}
+          #mBtns button.dan{color:var(--err)}
+          #toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#222;color:#fff;padding:9px 16px;border-radius:20px;font-size:13px;z-index:200;opacity:0;transition:opacity .25s;pointer-events:none;max-width:90%}
+          #toast.on{opacity:1}
+          #prev iframe{flex:1;border:none;background:#fff}
+          @media(min-width:900px){
+            #drawer{position:static;transform:none;width:260px;flex:none}
+            body.drawer-open #scrim{display:none}
+            #btnDrawer{display:none}
+          }
+          </style>
           </head>
-          <body>
-            <header>
-              <div class="logo"><span>⬢</span> PyIDE Pro (v3.11)</div>
-              <div class="actions">
-                <button class="btn btn-run" id="btnRun" onclick="startServer()">▶ RUN</button>
-                <button class="btn btn-stop" id="btnStop" onclick="stopServer()" disabled>⏹ STOP</button>
-              </div>
+          <body class="s1">
+          <div id="app">
+            <header id="top">
+              <button class="ib" id="btnDrawer" onclick="toggleDrawer()">☰</button>
+              <div id="title"><span id="curName">PyIDE</span><i id="dirty" hidden>●</i></div>
+              <button class="ib" onclick="saveCurrent(true)">💾</button>
+              <button class="ib" onclick="toggleFind()">🔍</button>
+              <button class="run" id="btnRun" onclick="toggleRun()">▶ Run</button>
+              <button class="ib" onclick="openSettings()">⚙</button>
             </header>
 
-            <div class="main-layout">
-              <div class="sidebar">
-                <div class="side-header">
-                  <span>EXPLORER</span>
-                  <div>
-                    <button onclick="createNode(false)">📄+</button>
-                    <button onclick="createNode(true)">📁+</button>
-                    <button onclick="document.getElementById('fileIn').click()">⬆</button>
-                  </div>
+            <div id="body">
+              <aside id="drawer">
+                <div class="dh">
+                  <span data-i="files">Files</span>
+                  <button class="ib" onclick="newNode(false)">📄</button>
+                  <button class="ib" onclick="newNode(true)">📁</button>
+                  <button class="ib" onclick="$('fileIn').click()">⬆</button>
                 </div>
-                <div id="fileList"></div>
-              </div>
+                <div id="tree"></div>
+              </aside>
+              <div id="scrim" onclick="toggleDrawer(false)"></div>
 
-              <div class="editor-area">
+              <main id="main">
+                <div id="tabs"></div>
+                <div id="findbar" hidden>
+                  <input id="fin" data-ph="find" placeholder="Find" oninput="findNext(false,true)">
+                  <input id="rin" data-ph="replace" placeholder="Replace">
+                  <button class="sb" onclick="findNext(true)">▲</button>
+                  <button class="sb" onclick="findNext(false)">▼</button>
+                  <button class="sb" onclick="replaceOne()" data-i="replace">Replace</button>
+                  <button class="sb" onclick="replaceAll()" data-i="replaceAll">All</button>
+                  <button class="sb" onclick="toggleFind(false)">✕</button>
+                </div>
                 <div id="editorHost">
-                  <textarea id="codeEditor"></textarea>
+                  <div id="empty"><span data-i="emptyHint">Open a file</span></div>
+                  <textarea id="code"></textarea>
                 </div>
-                <div class="terminal">
-                  <div class="term-header">
-                    <span>TERMINAL (Python 3.11)</span>
-                    <span style="cursor:pointer" onclick="clearLogs()">Clear</span>
+                <div id="keys"></div>
+                <section id="term">
+                  <div id="thead">
+                    <div class="t"><i id="dot"></i><span data-i="terminal">Terminal</span></div>
+                    <button onclick="openPreview()">🌐 <span data-i="preview">Preview</span></button>
+                    <button onclick="copyLog()">⧉</button>
+                    <button onclick="clearTerm()" data-i="clear">Clear</button>
+                    <button onclick="cycleTerm()" id="btnTerm">▲</button>
                   </div>
-                  <div class="term-body" id="termOut">> Waiting for commands...</div>
-                  <input type="text" class="term-input" id="termInput" placeholder="Type Python code or shell command..." onkeydown="handleTerminal(event)">
-                </div>
-              </div>
-
-              <div class="settings-panel">
-                <div>
-                  <h3>Main File (ملف التشغيل)</h3>
-                  <input type="text" id="mainFileInput" value="main.py">
-                  <button onclick="saveMainFile()">تغيير الملف الرئيسي</button>
-                </div>
-                <div>
-                  <h3>تثبيت مكتبة نقية (Pip)</h3>
-                  <input type="text" id="pipInput" placeholder="e.g. colorama">
-                  <button onclick="installPip()">Install Pure Package</button>
-                </div>
-              </div>
+                  <div id="tbody">
+                    <div id="tout"></div>
+                    <div id="tin">
+                      <input id="tinput" data-ph="typeHere" placeholder="..." autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send">
+                      <button onclick="submitTerm()">➤</button>
+                    </div>
+                  </div>
+                </section>
+              </main>
             </div>
+          </div>
 
-            <div class="modal" id="promptModal">
-              <div class="modal-content">
-                <h3 id="promptTitle">Enter Name</h3>
-                <input type="text" id="promptInput">
-                <button onclick="submitPrompt()">OK</button>
+          <div class="overlay" id="settings" hidden>
+            <div class="oh"><button class="ib" onclick="$('settings').hidden=true">←</button><span data-i="settings">Settings</span></div>
+            <div class="ob">
+              <div class="sec"><h4 data-i="language">Language</h4>
+                <div class="fr"><select id="selLang" onchange="S.lang=this.value;saveS();applyLang()"><option value="ar">العربية</option><option value="en">English</option></select>
+                <select id="selTheme" onchange="S.theme=this.value;saveS();applyTheme()"><option value="dark" data-i="dark">Dark</option><option value="light" data-i="light">Light</option></select></div>
               </div>
+              <div class="sec"><h4 data-i="fontSize">Font size</h4>
+                <div class="fr"><input type="range" id="rngFs" min="10" max="24" step="1" style="flex:1" oninput="S.fs=+this.value;saveS();applyFont()"><b id="fsv"></b></div>
+              </div>
+              <div class="sec">
+                <div class="fr"><label><input type="checkbox" id="chkWrap" onchange="S.wrap=this.checked;saveS();ed.setOption('lineWrapping',S.wrap)"> <span data-i="wrap">Wrap</span></label>
+                <label><input type="checkbox" id="chkAuto" onchange="S.auto=this.checked;saveS()"> <span data-i="autosave">Autosave</span></label></div>
+              </div>
+              <div class="sec"><h4 data-i="mainFile">Main file</h4>
+                <div class="fr"><input type="text" id="mainIn" value="main.py"><button class="btn pri" onclick="saveMain()" data-i="setMain">Set</button></div>
+              </div>
+              <div class="sec"><h4 data-i="pipTitle">Install package</h4>
+                <div class="fr"><input type="text" id="pipIn" placeholder="e.g. colorama" autocapitalize="off" autocorrect="off"><button class="btn pri" onclick="pipInstall()" data-i="install">Install</button></div>
+                <h4 style="margin-top:14px" data-i="libs">Installed</h4>
+                <div class="chips" id="libs"></div>
+                <h4 style="margin-top:14px" data-i="bundled">Bundled</h4>
+                <div class="chips"><span class="chip">requests</span><span class="chip">numpy</span><span class="chip">pandas</span><span class="chip">beautifulsoup4</span><span class="chip">lxml</span><span class="chip">flask</span><span class="chip">telethon</span><span class="chip">pycryptodome</span><span class="chip">pillow</span><span class="chip">rich</span><span class="chip">colorama</span><span class="chip">tqdm</span></div>
+              </div>
+              <div class="sec fr" style="flex-direction:column;align-items:stretch">
+                <button class="btn" onclick="Android.shareWorkspace()" data-i="shareWs">Share</button>
+                <button class="btn dan" onclick="forceRestart()" data-i="restart">Restart</button>
+              </div>
+              <div class="sec"><h4 data-i="about">About</h4><div id="about" style="color:var(--mut);font-size:12px;font-family:monospace"></div></div>
             </div>
+          </div>
 
-            <input type="file" id="fileIn" hidden>
+          <div class="overlay" id="prev" hidden>
+            <div class="oh"><button class="ib" onclick="closePreview()">←</button><span id="prevUrl"></span>
+              <button class="ib" onclick="$('pframe').src=$('pframe').src">⟳</button>
+              <button class="ib" onclick="Android.openExternal(curUrl)">↗</button></div>
+            <iframe id="pframe"></iframe>
+          </div>
 
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
-            <script>
-              let editor, activeFile = null, pendingCalls = {}, reqId = 0;
-              let isRunning = false;
+          <div class="modal" id="modal"><div class="box"><h3 id="mTitle"></h3><div id="mBody"></div><input id="mInput" hidden autocapitalize="off" autocorrect="off" spellcheck="false"><div id="mBtns"></div></div></div>
+          <div id="toast"></div>
+          <input type="file" id="fileIn" multiple hidden>
 
-              editor = CodeMirror.fromTextArea(document.getElementById('codeEditor'), {
-                mode: 'python', theme: 'material-darker', lineNumbers: true, lineWrapping: true
+          <script src="lib/codemirror.min.js"></script>
+          <script src="lib/python.min.js"></script>
+          <script src="lib/javascript.min.js"></script>
+          <script src="lib/xml.min.js"></script>
+          <script src="lib/css.min.js"></script>
+          <script src="lib/htmlmixed.min.js"></script>
+          <script src="lib/markdown.min.js"></script>
+          <script src="lib/shell.min.js"></script>
+          <script src="lib/searchcursor.min.js"></script>
+          <script src="lib/closebrackets.min.js"></script>
+          <script src="lib/matchbrackets.min.js"></script>
+          <script src="lib/active-line.min.js"></script>
+          <script src="lib/comment.min.js"></script>
+          <script>
+          const $ = id => document.getElementById(id);
+          const S = {theme:'dark', fs:14, wrap:true, auto:true, lang:'ar', open:[], last:null};
+          try { Object.assign(S, JSON.parse(localStorage.getItem('pyide') || '{}')); } catch (e) {}
+          function saveS() { try { localStorage.setItem('pyide', JSON.stringify(S)); } catch (e) {} }
+
+          const L = {
+            ar: {files:'الملفات', newFile:'ملف جديد', newFolder:'مجلد جديد', upload:'رفع', rename:'إعادة تسمية', del:'حذف', share:'مشاركة',
+              cancel:'إلغاء', ok:'موافق', saved:'تم الحفظ ✓', settings:'الإعدادات', language:'اللغة والمظهر', dark:'داكن', light:'فاتح',
+              fontSize:'حجم الخط', wrap:'التفاف الأسطر', autosave:'حفظ تلقائي', mainFile:'ملف التشغيل الرئيسي', setMain:'تعيين',
+              pipTitle:'تثبيت مكتبة (Pip)', install:'تثبيت', libs:'المكتبات المثبتة', bundled:'مثبتة مسبقاً', shareWs:'مشاركة المشروع (zip)',
+              restart:'إيقاف قسري وإعادة تشغيل المحرك', about:'حول', terminal:'الطرفية', clear:'مسح', preview:'معاينة', replace:'استبدال',
+              replaceAll:'الكل', find:'بحث', nomatch:'لا توجد نتائج', binary:'ملف ثنائي لا يمكن فتحه', confirmDel:'حذف نهائي:',
+              stopping:'جارٍ الإيقاف…', emptyHint:'افتح ملفاً من القائمة ☰', typeHere:'أوامر أو مدخلات البرنامج…', name:'الاسم',
+              run:'تشغيل', stop:'إيقاف', unzip:'فك ضغط الملف؟', uploaded:'تم الرفع ✓', exists:'الاسم موجود مسبقاً', url:'عنوان المعاينة',
+              restartConfirm:'سيتم إغلاق التطبيق. افتحه مرة أخرى بعد ذلك. متابعة؟', copied:'تم النسخ', newHere:'جديد هنا', none:'لا شيء'},
+            en: {files:'Files', newFile:'New file', newFolder:'New folder', upload:'Upload', rename:'Rename', del:'Delete', share:'Share',
+              cancel:'Cancel', ok:'OK', saved:'Saved ✓', settings:'Settings', language:'Language & theme', dark:'Dark', light:'Light',
+              fontSize:'Font size', wrap:'Wrap lines', autosave:'Autosave', mainFile:'Main file', setMain:'Set',
+              pipTitle:'Install package (Pip)', install:'Install', libs:'Installed packages', bundled:'Bundled', shareWs:'Share project (zip)',
+              restart:'Force stop & restart engine', about:'About', terminal:'Terminal', clear:'Clear', preview:'Preview', replace:'Replace',
+              replaceAll:'All', find:'Find', nomatch:'No matches', binary:'Binary file cannot be opened', confirmDel:'Delete permanently:',
+              stopping:'Stopping…', emptyHint:'Open a file from ☰', typeHere:'Commands or program input…', name:'Name',
+              run:'Run', stop:'Stop', unzip:'Unzip this file?', uploaded:'Uploaded ✓', exists:'Name already exists', url:'Preview URL',
+              restartConfirm:'The app will close. Open it again afterwards. Continue?', copied:'Copied', newHere:'New here', none:'none'}
+          };
+          const t = k => (L[S.lang] || L.en)[k] || k;
+          function applyLang() {
+            document.querySelectorAll('[data-i]').forEach(e => { e.textContent = t(e.dataset.i); });
+            document.querySelectorAll('[data-ph]').forEach(e => { e.placeholder = t(e.dataset.ph); });
+            setRunUi(running);
+          }
+          function applyTheme() {
+            document.documentElement.dataset.theme = S.theme;
+            if (ed) ed.setOption('theme', S.theme === 'dark' ? 'material-darker' : 'default');
+          }
+          function applyFont() {
+            document.documentElement.style.setProperty('--fs', S.fs + 'px');
+            $('fsv').textContent = S.fs;
+            if (ed) ed.refresh();
+          }
+
+          /* ---------- جسر بايثون ---------- */
+          const pending = {};
+          let rid = 0;
+          function dec(b64) {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new TextDecoder().decode(bytes);
+          }
+          window.onPyResult = function (id, b64, ok) {
+            const p = pending[id];
+            if (!p) return;
+            delete pending[id];
+            const v = b64 ? dec(b64) : '';
+            ok ? p.res(v) : p.rej(new Error(v));
+          };
+          function py(fn, arg) {
+            return new Promise((res, rej) => {
+              const id = 'r' + (++rid);
+              pending[id] = {res, rej};
+              try { Android.callPy(fn, arg === undefined ? '' : String(arg), id); } catch (e) { delete pending[id]; rej(e); }
+            });
+          }
+          function pyBin(fn, b64, name) {
+            return new Promise((res, rej) => {
+              const id = 'r' + (++rid);
+              pending[id] = {res, rej};
+              try { Android.callPyBinary(fn, b64, name, id); } catch (e) { delete pending[id]; rej(e); }
+            });
+          }
+
+          /* ---------- نوافذ حوار ---------- */
+          let modalRes = null;
+          function closeModal(val) {
+            $('modal').classList.remove('on');
+            const r = modalRes; modalRes = null;
+            if (r) r(val);
+          }
+          function showModal(o) {
+            return new Promise(res => {
+              modalRes = res;
+              $('mTitle').textContent = o.title || '';
+              $('mBody').textContent = o.msg || '';
+              $('mBody').hidden = !o.msg;
+              const inp = $('mInput');
+              inp.hidden = o.input === undefined;
+              if (o.input !== undefined) inp.value = o.input;
+              const bx = $('mBtns');
+              bx.innerHTML = '';
+              bx.className = o.row ? 'row2' : '';
+              o.buttons.forEach(b => {
+                const el = document.createElement('button');
+                el.textContent = b.label;
+                if (b.cls) el.className = b.cls;
+                el.onclick = () => closeModal(b.val === '__in' ? inp.value : b.val);
+                bx.appendChild(el);
               });
+              $('modal').classList.add('on');
+              if (o.input !== undefined) setTimeout(() => { inp.focus(); inp.select(); }, 60);
+            });
+          }
+          $('mInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') closeModal($('mInput').value);
+          });
+          const askText = (title, def) => showModal({title, input: def, row: true, buttons: [{label: t('cancel'), val: null}, {label: t('ok'), val: '__in', cls: 'pri'}]});
+          const askConfirm = (title, msg) => showModal({title, msg, row: true, buttons: [{label: t('cancel'), val: false}, {label: t('ok'), val: true, cls: 'pri'}]});
+          async function sheet(title, actions) {
+            const btns = actions.map((a, i) => ({label: a.label, val: i, cls: a.cls}));
+            btns.push({label: t('cancel'), val: null});
+            const r = await showModal({title, buttons: btns});
+            if (r !== null && actions[r]) await actions[r].fn();
+          }
+          let toastT = null;
+          function toast(m) {
+            const el = $('toast');
+            el.textContent = m; el.classList.add('on');
+            clearTimeout(toastT);
+            toastT = setTimeout(() => el.classList.remove('on'), 1800);
+          }
 
-              function callPython(func, args = "") {
-                return new Promise((resolve) => {
-                  const id = "req_" + (++reqId);
-                  pendingCalls[id] = resolve;
-                  window.Android.callPy(func, args, id);
-                });
+          /* ---------- المحرر ---------- */
+          let ed, docs = {}, order = [], active = null, curDir = '', items = [], expanded = new Set(), autoT = null;
+          function modeFor(p) {
+            const e = (p.split('.').pop() || '').toLowerCase();
+            return {py: 'python', js: 'javascript', json: {name: 'javascript', json: true}, html: 'htmlmixed', htm: 'htmlmixed',
+              xml: 'xml', css: 'css', md: 'markdown', sh: 'shell'}[e] || 'text/plain';
+          }
+          function initEditor() {
+            ed = CodeMirror.fromTextArea($('code'), {
+              lineNumbers: true, lineWrapping: S.wrap, indentUnit: 4, tabSize: 4, indentWithTabs: false,
+              matchBrackets: true, autoCloseBrackets: true, styleActiveLine: true, mode: 'python',
+              theme: S.theme === 'dark' ? 'material-darker' : 'default',
+              extraKeys: {
+                'Tab': cm => cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    ', 'end'),
+                'Shift-Tab': cm => cm.indentSelection('subtract'),
+                'Ctrl-S': () => saveCurrent(true),
+                'Ctrl-/': cm => cm.toggleComment(),
+                'Ctrl-F': () => toggleFind(true),
+                'Ctrl-Enter': () => toggleRun()
               }
+            });
+            ed.on('change', () => {
+              updateDirty();
+              if (S.auto && active) { clearTimeout(autoT); autoT = setTimeout(() => saveCurrent(false), 1500); }
+            });
+            ed.setOption('readOnly', 'nocursor');
+          }
+          function isDirty(p) { const d = docs[p]; return !!d && !d.doc.isClean(d.gen); }
+          function updateDirty() {
+            if (!active) return;
+            const d = isDirty(active);
+            $('dirty').hidden = !d;
+            if (docs[active].was !== d) { docs[active].was = d; renderTabs(); }
+          }
+          async function openFile(path) {
+            if (!docs[path]) {
+              const c = await py('read_file', path);
+              if (c.charAt(0) === '\u0000') { toast(t('binary')); return; }
+              const d = new CodeMirror.Doc(c, modeFor(path));
+              docs[path] = {doc: d, gen: d.changeGeneration(true), was: false};
+              order.push(path);
+            }
+            switchTo(path);
+          }
+          function switchTo(path) {
+            active = path;
+            ed.swapDoc(docs[path].doc);
+            ed.setOption('readOnly', false);
+            $('empty').hidden = true;
+            $('curName').textContent = path;
+            const i = path.lastIndexOf('/');
+            curDir = i >= 0 ? path.slice(0, i) : '';
+            S.last = path; S.open = order.slice(); saveS();
+            updateDirty(); renderTabs(); renderTree();
+            setTimeout(() => ed.refresh(), 30);
+          }
+          function showNone() {
+            active = null;
+            ed.swapDoc(new CodeMirror.Doc(''));
+            ed.setOption('readOnly', 'nocursor');
+            $('empty').hidden = false;
+            $('curName').textContent = 'PyIDE';
+            $('dirty').hidden = true;
+            S.last = null; S.open = order.slice(); saveS();
+            renderTabs(); renderTree();
+          }
+          async function saveFile(path, quiet) {
+            const d = docs[path];
+            if (!d) return;
+            await py('write_file', JSON.stringify({path: path, content: d.doc.getValue()}));
+            d.gen = d.doc.changeGeneration(true);
+            d.was = false;
+            if (path === active) $('dirty').hidden = true;
+            renderTabs();
+            if (!quiet) toast(t('saved'));
+          }
+          async function saveCurrent(show) { if (active) { try { await saveFile(active, !show); } catch (e) { toast(e.message); } } }
+          async function saveAll() { for (const p of order) if (isDirty(p)) await saveFile(p, true); }
+          async function closeTab(p) {
+            if (isDirty(p)) await saveFile(p, true);
+            const i = order.indexOf(p);
+            order.splice(i, 1);
+            delete docs[p];
+            if (active === p) {
+              if (order.length) switchTo(order[Math.min(i, order.length - 1)]); else showNone();
+            } else { S.open = order.slice(); saveS(); renderTabs(); }
+          }
+          function renderTabs() {
+            const box = $('tabs');
+            box.innerHTML = '';
+            order.forEach(p => {
+              const el = document.createElement('div');
+              el.className = 'tab' + (p === active ? ' active' : '');
+              const nm = document.createElement('span');
+              nm.textContent = p.split('/').pop();
+              el.appendChild(nm);
+              if (isDirty(p)) { const i = document.createElement('i'); i.textContent = ' ●'; el.appendChild(i); }
+              const x = document.createElement('b');
+              x.textContent = '×';
+              x.onclick = ev => { ev.stopPropagation(); closeTab(p); };
+              el.appendChild(x);
+              el.onclick = () => switchTo(p);
+              box.appendChild(el);
+              if (p === active) setTimeout(() => el.scrollIntoView({inline: 'nearest', block: 'nearest'}), 0);
+            });
+            box.hidden = order.length === 0;
+          }
 
-              window.onPyResult = function(id, result) {
-                if (pendingCalls[id]) {
-                  pendingCalls[id](result);
-                  delete pendingCalls[id];
-                }
+          /* ---------- البحث ---------- */
+          function toggleFind(force) {
+            const fb = $('findbar');
+            const show = force === undefined ? fb.hidden : force;
+            fb.hidden = !show;
+            if (show) { const s = ed.getSelection(); if (s && s.indexOf('\n') < 0) $('fin').value = s; $('fin').focus(); $('fin').select(); }
+            setTimeout(() => ed.refresh(), 30);
+          }
+          function findNext(rev, fromStart) {
+            const q = $('fin').value;
+            if (!q || !active) return;
+            const opt = {caseFold: true};
+            let start = rev ? ed.getCursor('from') : (fromStart ? ed.getCursor('from') : ed.getCursor('to'));
+            let cur = ed.getSearchCursor(q, start, opt);
+            let ok = rev ? cur.findPrevious() : cur.findNext();
+            if (!ok) {
+              cur = ed.getSearchCursor(q, rev ? CodeMirror.Pos(ed.lastLine()) : CodeMirror.Pos(0, 0), opt);
+              ok = rev ? cur.findPrevious() : cur.findNext();
+              if (!ok) { if (!fromStart) toast(t('nomatch')); return; }
+            }
+            ed.setSelection(cur.from(), cur.to());
+            ed.scrollIntoView({from: cur.from(), to: cur.to()}, 80);
+          }
+          function replaceOne() {
+            const q = $('fin').value;
+            if (!q || !active) return;
+            if (ed.getSelection().toLowerCase() === q.toLowerCase()) ed.replaceSelection($('rin').value);
+            findNext(false);
+          }
+          function replaceAll() {
+            const q = $('fin').value;
+            if (!q || !active) return;
+            let n = 0;
+            const cur = ed.getSearchCursor(q, CodeMirror.Pos(0, 0), {caseFold: true});
+            const rep = $('rin').value;
+            ed.operation(() => { while (cur.findNext()) { cur.replace(rep); n++; } });
+            toast(n + ' ✓');
+          }
+
+          /* ---------- أزرار الأقواس ---------- */
+          const KEYS = ['Tab', '(', ')', '[', ']', '{', '}', '"', "'", ':', '=', '_', '#', '.', ',', '/', '\\', '+', '-', '*', '<', '>', '↶', '↷'];
+          (function () {
+            const box = $('keys');
+            KEYS.forEach(k => {
+              const b = document.createElement('button');
+              b.textContent = k === 'Tab' ? '⇥' : k;
+              b.onpointerdown = ev => {
+                ev.preventDefault();
+                if (!active) return;
+                if (k === 'Tab') ed.execCommand('defaultTab');
+                else if (k === '↶') ed.undo();
+                else if (k === '↷') ed.redo();
+                else ed.replaceSelection(k, 'end');
+                ed.focus();
               };
+              box.appendChild(b);
+            });
+          })();
+          CodeMirror.commands.defaultTab = cm => cm.somethingSelected() ? cm.indentSelection('add') : cm.replaceSelection('    ', 'end');
 
-              async function refreshFiles() {
-                const res = await callPython("list_files");
-                try {
-                  const files = JSON.parse(res);
-                  const list = document.getElementById('fileList');
-                  list.innerHTML = '';
-                  files.forEach(f => {
-                    const div = document.createElement('div');
-                    div.className = `file-item ${activeFile === f.path ? 'active' : ''}`;
-                    div.innerHTML = `<span>${f.isDir ? '📁' : '📄'} ${f.name}</span><span class="del" onclick="delNode(event, '${f.path}')">🗑</span>`;
-                    if (!f.isDir) div.onclick = () => openFile(f.path);
-                    list.appendChild(div);
-                  });
-                } catch(e) {}
-              }
-
-              async function openFile(path) {
-                activeFile = path;
-                const content = await callPython("read_file", path);
-                editor.setValue(content);
-                refreshFiles();
-              }
-
-              function delNode(e, path) {
-                e.stopPropagation();
-                if (!confirm(`Delete ${path}?`)) return;
-                callPython("delete_item", path).then(() => {
-                  if (activeFile === path) { editor.setValue(''); activeFile = null; }
-                  refreshFiles();
-                });
-              }
-
-              let promptMode = null;
-              function createNode(isDir) {
-                promptMode = isDir ? 'dir' : 'file';
-                document.getElementById('promptTitle').textContent = isDir ? 'New Folder Name' : 'New File Name';
-                document.getElementById('promptInput').value = isDir ? 'folder' : 'script.py';
-                document.getElementById('promptModal').classList.add('on');
-              }
-              
-              function submitPrompt() {
-                const val = document.getElementById('promptInput').value.trim();
-                document.getElementById('promptModal').classList.remove('on');
-                if (!val) return;
-                if (promptMode === 'dir') callPython("make_dir", val).then(refreshFiles);
-                else callPython("write_file", JSON.stringify({path: val, content: ''})).then(() => { refreshFiles(); openFile(val); });
-              }
-
-              document.getElementById('fileIn').onchange = function(e) {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = function() {
-                  const b64 = reader.result.split(',')[1];
-                  const id = "bin_" + (++reqId);
-                  pendingCalls[id] = function(res) {
-                    if (file.name.endsWith('.zip')) {
-                      callPython("unzip_file", file.name).then(() => {
-                        refreshFiles();
-                        alert("تم فك الضغط بنجاح!");
-                      });
-                    } else {
-                      refreshFiles();
-                    }
+          /* ---------- الملفات ---------- */
+          function toggleDrawer(force) {
+            document.body.classList.toggle('drawer-open', force === undefined ? !document.body.classList.contains('drawer-open') : force);
+          }
+          async function refreshTree() {
+            try { items = JSON.parse(await py('list_files')); } catch (e) { items = []; }
+            renderTree();
+          }
+          function buildTree() {
+            const root = {children: {}};
+            items.forEach(it => {
+              const parts = it.path.split('/');
+              let n = root;
+              parts.forEach((p, i) => {
+                if (!n.children[p]) n.children[p] = {name: p, path: parts.slice(0, i + 1).join('/'), isDir: true, children: {}};
+                n = n.children[p];
+              });
+              n.isDir = it.isDir;
+            });
+            return root;
+          }
+          function renderTree() {
+            const box = $('tree');
+            box.innerHTML = '';
+            const walk = (node, depth) => {
+              Object.values(node.children)
+                .sort((a, b) => (b.isDir - a.isDir) || a.name.localeCompare(b.name))
+                .forEach(n => {
+                  const row = document.createElement('div');
+                  row.className = 'row' + (n.path === active ? ' active' : '') + (n.isDir && n.path === curDir ? ' cur' : '');
+                  row.style.paddingLeft = (10 + depth * 14) + 'px';
+                  const nm = document.createElement('span');
+                  nm.className = 'nm';
+                  const open = expanded.has(n.path);
+                  nm.textContent = (n.isDir ? (open ? '▾ 📂 ' : '▸ 📁 ') : (n.name.endsWith('.py') ? '🐍 ' : '📄 ')) + n.name;
+                  row.appendChild(nm);
+                  const mn = document.createElement('button');
+                  mn.className = 'mn';
+                  mn.textContent = '⋮';
+                  mn.onclick = ev => { ev.stopPropagation(); rowMenu(n); };
+                  row.appendChild(mn);
+                  row.onclick = () => {
+                    if (n.isDir) { if (open) expanded.delete(n.path); else expanded.add(n.path); curDir = n.path; renderTree(); }
+                    else { openFile(n.path); if (innerWidth < 900) toggleDrawer(false); }
                   };
-                  window.Android.callPyBinary("write_binary", b64, file.name, id);
-                };
-                reader.readAsDataURL(file);
-              };
-
-              async function startServer() {
-                if (isRunning) return;
-                isRunning = true;
-                document.getElementById('btnRun').disabled = true;
-                document.getElementById('btnStop').disabled = false;
-                window.Android.startServer();
-                startLogPolling();
-              }
-
-              function stopServer() {
-                isRunning = false;
-                document.getElementById('btnRun').disabled = false;
-                document.getElementById('btnStop').disabled = true;
-                window.Android.stopServer();
-              }
-
-              function saveMainFile() {
-                const val = document.getElementById('mainFileInput').value.trim();
-                callPython("set_main_script", val).then(() => alert("الملف الرئيسي أصبح: " + val));
-              }
-
-              function startLogPolling() {
-                setInterval(() => {
-                  if (!isRunning) return;
-                  const logs = window.Android.getLogs();
-                  if (logs) {
-                    const out = document.getElementById('termOut');
-                    out.innerText = logs;
-                    out.scrollTop = out.scrollHeight;
-                  }
-                }, 1000);
-              }
-
-              function clearLogs() {
-                window.Android.clearLogs();
-                document.getElementById('termOut').innerText = "> Logs cleared.";
-              }
-
-              async function handleTerminal(e) {
-                if (e.key !== 'Enter') return;
-                const cmd = e.target.value.trim();
-                if (!cmd) return;
-                e.target.value = '';
-
-                const out = document.getElementById('termOut');
-                out.innerText += `\n$ ${cmd}\n`;
-
-                if (cmd.startsWith('pip install ')) {
-                  const pkg = cmd.replace('pip install ', '').trim();
-                  const res = await callPython("install_pip_package", pkg);
-                  out.innerText += res + '\n';
-                } else if (['ls', 'pwd', 'cat', 'echo'].some(c => cmd.startsWith(c))) {
-                  const res = await callPython("exec_system", cmd);
-                  out.innerText += res + '\n';
-                } else {
-                  const res = await callPython("exec_python", cmd);
-                  if (res !== "OK") out.innerText += res + '\n';
+                  box.appendChild(row);
+                  if (n.isDir && open) walk(n, depth + 1);
+                });
+            };
+            walk(buildTree(), 0);
+          }
+          function join(dir, name) { return dir ? dir + '/' + name : name; }
+          async function newNode(isDir) {
+            const name = await askText(t(isDir ? 'newFolder' : 'newFile') + (curDir ? ' (' + curDir + ')' : ''), isDir ? 'folder' : 'script.py');
+            if (!name || !name.trim()) return;
+            const p = join(curDir, name.trim());
+            try {
+              if (items.some(i => i.path === p)) { toast(t('exists')); return; }
+              if (isDir) { await py('make_dir', p); expanded.add(p); }
+              else await py('write_file', JSON.stringify({path: p, content: ''}));
+              if (curDir) expanded.add(curDir);
+              await refreshTree();
+              if (!isDir) { await openFile(p); if (innerWidth < 900) toggleDrawer(false); }
+            } catch (e) { toast(e.message); }
+          }
+          function rowMenu(n) {
+            const acts = [];
+            if (n.isDir) acts.push({label: '📄 ' + t('newHere'), fn: () => { curDir = n.path; return newNode(false); }});
+            acts.push({label: '✏️ ' + t('rename'), fn: async () => {
+              const nn = await askText(t('rename'), n.name);
+              if (!nn || nn === n.name) return;
+              const i = n.path.lastIndexOf('/');
+              const np = (i >= 0 ? n.path.slice(0, i + 1) : '') + nn.trim();
+              const r = await py('rename_item', JSON.stringify({from: n.path, to: np}));
+              if (r === 'EXISTS') { toast(t('exists')); return; }
+              Object.keys(docs).forEach(k => {
+                if (k === n.path || k.startsWith(n.path + '/')) {
+                  const nk = np + k.slice(n.path.length);
+                  docs[nk] = docs[k]; delete docs[k];
+                  order = order.map(x => x === k ? nk : x);
+                  if (active === k) active = nk;
                 }
-                out.scrollTop = out.scrollHeight;
-              }
-
-              refreshFiles();
-              callPython("get_main_script").then(res => {
-                if(res) document.getElementById('mainFileInput').value = res;
               });
-            </script>
+              if (active) { $('curName').textContent = active; S.last = active; }
+              S.open = order.slice(); saveS();
+              renderTabs();
+              await refreshTree();
+            }});
+            if (!n.isDir) acts.push({label: '📤 ' + t('share'), fn: () => Android.shareWorkspaceFile(n.path)});
+            acts.push({label: '🗑 ' + t('del'), cls: 'dan', fn: async () => {
+              if (!(await askConfirm(t('del'), t('confirmDel') + ' ' + n.path))) return;
+              await py('delete_item', n.path);
+              for (const k of Object.keys(docs)) {
+                if (k === n.path || k.startsWith(n.path + '/')) { delete docs[k]; order = order.filter(x => x !== k); if (active === k) active = null; }
+              }
+              if (!active) { if (order.length) switchTo(order[0]); else showNone(); }
+              S.open = order.slice(); saveS();
+              await refreshTree();
+            }});
+            sheet(n.path, acts);
+          }
+          $('fileIn').onchange = async function (e) {
+            const files = Array.from(e.target.files || []);
+            e.target.value = '';
+            for (const f of files) {
+              const data = await new Promise((res, rej) => {
+                const r = new FileReader();
+                r.onload = () => res(String(r.result).split(',')[1] || '');
+                r.onerror = rej;
+                r.readAsDataURL(f);
+              });
+              const p = join(curDir, f.name);
+              try {
+                await pyBin('write_binary', data, p);
+                if (/\.zip$/i.test(f.name) && await askConfirm(f.name, t('unzip'))) await py('unzip_file', p);
+                if (docs[p]) { docs[p].doc.setValue(await py('read_file', p)); docs[p].gen = docs[p].doc.changeGeneration(true); }
+              } catch (err) { toast(err.message); }
+            }
+            toast(t('uploaded'));
+            refreshTree();
+          };
+
+          /* ---------- التشغيل والطرفية ---------- */
+          let running = false, starting = false, startedAt = 0, logOff = 0, termSize = 1;
+          const decoder = new TextDecoder();
+          function setRunUi(v) {
+            const b = $('btnRun');
+            b.textContent = v ? '⏹ ' + t('stop') : '▶ ' + t('run');
+            b.className = 'run' + (v ? ' stop' : '');
+            $('dot').className = v ? 'on' : '';
+          }
+          function setRunning(v) {
+            if (v) starting = false;
+            else if (starting && Date.now() - startedAt < 3000) return;
+            else starting = false;
+            if (v !== running) { running = v; setRunUi(v); }
+          }
+          async function toggleRun() {
+            if (running) { try { await py('stop_server'); toast(t('stopping')); } catch (e) {} return; }
+            if (starting) return;
+            await saveAll();
+            starting = true; startedAt = Date.now();
+            setTermSize(Math.max(termSize, 1));
+            running = true; setRunUi(true);
+            Android.startServer();
+          }
+          function setTermSize(n) {
+            termSize = n;
+            document.body.classList.remove('s0', 's1', 's2');
+            document.body.classList.add('s' + n);
+            $('btnTerm').textContent = n === 2 ? '▼' : '▲';
+            setTimeout(() => { ed.refresh(); const o = $('tout'); o.scrollTop = o.scrollHeight; }, 50);
+          }
+          function cycleTerm() { setTermSize(termSize === 0 ? 1 : termSize === 1 ? 2 : 0); }
+          function classify(l) {
+            if (/^(Traceback|\s+File "|\w*(Error|Exception)\b.*:|✖)/.test(l)) return 'e';
+            if (/^(▶|✔|■|>>>|>)/.test(l)) return 'i';
+            return '';
+          }
+          function appendTerm(text) {
+            const tb = $('tout');
+            const atBottom = tb.scrollTop + tb.clientHeight >= tb.scrollHeight - 40;
+            text.split(/(?<=\n)/).forEach(line => {
+              if (!line) return;
+              const s = document.createElement('span');
+              s.textContent = line;
+              const c = classify(line);
+              if (c) s.className = c;
+              tb.appendChild(s);
+            });
+            while (tb.childElementCount > 2500) tb.removeChild(tb.firstChild);
+            if (atBottom) tb.scrollTop = tb.scrollHeight;
+          }
+          function pollLog() {
+            let r;
+            try { r = Android.readLog(String(logOff)); } catch (e) { return; }
+            const i = r.indexOf(':');
+            const len = parseInt(r.slice(0, i), 10) || 0;
+            const b = r.slice(i + 1);
+            if (b) {
+              const bin = atob(b);
+              const bytes = new Uint8Array(bin.length);
+              for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+              appendTerm(decoder.decode(bytes, {stream: true}));
+            }
+            logOff = len;
+          }
+          async function tick() {
+            pollLog();
+            try { setRunning((await py('get_status')) === '1'); } catch (e) {}
+          }
+          function clearTerm() { Android.clearLogs(); logOff = 0; $('tout').innerHTML = ''; }
+          function copyLog() { Android.copyText($('tout').innerText); toast(t('copied')); }
+          const hist = []; let hi = 0;
+          async function submitTerm() {
+            const inp = $('tinput');
+            const v = inp.value;
+            inp.value = '';
+            if (running) { try { await py('send_input', v); } catch (e) { appendTerm('✖ ' + e.message + '\n'); } return; }
+            if (!v.trim()) return;
+            if (v.trim() === 'clear') { clearTerm(); return; }
+            hist.push(v); hi = hist.length;
+            py('terminal', v).catch(e => appendTerm('✖ ' + e.message + '\n'));
+          }
+          $('tinput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); submitTerm(); }
+            else if (e.key === 'ArrowUp' && hist.length) { hi = Math.max(0, hi - 1); e.target.value = hist[hi]; }
+            else if (e.key === 'ArrowDown' && hist.length) { hi = Math.min(hist.length, hi + 1); e.target.value = hist[hi] || ''; }
+          });
+
+          /* ---------- معاينة localhost ---------- */
+          let curUrl = 'http://127.0.0.1:5000';
+          async function openPreview() {
+            const u = await askText(t('url'), curUrl);
+            if (!u) return;
+            curUrl = /^https?:\/\//.test(u) ? u : 'http://' + u;
+            $('prevUrl').textContent = curUrl;
+            $('pframe').src = curUrl;
+            $('prev').hidden = false;
+          }
+          function closePreview() { $('prev').hidden = true; $('pframe').src = 'about:blank'; }
+
+          /* ---------- الإعدادات ---------- */
+          async function openSettings() {
+            $('selLang').value = S.lang; $('selTheme').value = S.theme; $('rngFs').value = S.fs; $('fsv').textContent = S.fs;
+            $('chkWrap').checked = S.wrap; $('chkAuto').checked = S.auto;
+            $('settings').hidden = false;
+            try { $('mainIn').value = await py('get_main_script'); } catch (e) {}
+            loadLibs();
+            try { const i = JSON.parse(await py('get_info')); $('about').textContent = 'Python ' + i.python + '\n' + i.workspace; } catch (e) {}
+          }
+          async function loadLibs() {
+            try {
+              const l = JSON.parse(await py('list_libs'));
+              const box = $('libs');
+              box.innerHTML = '';
+              if (!l.length) { box.innerHTML = '<span style="color:var(--mut)">' + t('none') + '</span>'; return; }
+              l.forEach(n => { const c = document.createElement('span'); c.className = 'chip'; c.textContent = n; box.appendChild(c); });
+            } catch (e) {}
+          }
+          async function saveMain() {
+            const v = $('mainIn').value.trim() || 'main.py';
+            await py('set_main_script', v);
+            toast('main: ' + v);
+          }
+          function pipInstall() {
+            const v = $('pipIn').value.trim();
+            if (!v) return;
+            $('settings').hidden = true;
+            setTermSize(Math.max(termSize, 1));
+            py('terminal', 'pip install ' + v).then(() => loadLibs()).catch(e => appendTerm('✖ ' + e.message + '\n'));
+            $('pipIn').value = '';
+          }
+          async function forceRestart() {
+            if (await askConfirm(t('restart'), t('restartConfirm'))) Android.restartApp();
+          }
+
+          window.onBack = function () {
+            if ($('modal').classList.contains('on')) { closeModal(null); return true; }
+            if (!$('prev').hidden) { closePreview(); return true; }
+            if (!$('settings').hidden) { $('settings').hidden = true; return true; }
+            if (!$('findbar').hidden) { toggleFind(false); return true; }
+            if (document.body.classList.contains('drawer-open') && innerWidth < 900) { toggleDrawer(false); return true; }
+            return false;
+          };
+
+          /* ---------- البدء ---------- */
+          (async function init() {
+            initEditor();
+            applyTheme(); applyFont(); applyLang();
+            setTermSize(1);
+            await refreshTree();
+            let main = 'main.py';
+            try { main = await py('get_main_script'); $('mainIn').value = main; } catch (e) {}
+            const exists = p => items.some(i => !i.isDir && i.path === p);
+            for (const p of (S.open || [])) { if (exists(p)) { try { await openFile(p); } catch (e) {} } }
+            if (S.last && docs[S.last]) switchTo(S.last);
+            else if (!active && exists(main)) await openFile(main);
+            setInterval(tick, 700);
+          })();
+          </script>
           </body>
           </html>
           HTMLEOF
-
-          # 9. وضع الأيقونة في مكانها
-          if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; fi
 
       - name: Build APK
         run: |
@@ -688,3 +1859,4 @@ jobs:
         with:
           name: app-debug
           path: /tmp/app/**/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
