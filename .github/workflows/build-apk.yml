@@ -59,12 +59,18 @@ jobs:
           PROJECT=/tmp/app
           PKG_PATH=$(echo "$PKG_NAME" | tr '.' '/')
 
+          # 1. إنشاء المجلدات الأساسية (تم إضافة مجلد الأيقونة هنا لحل المشكلة)
           mkdir -p "$PROJECT/app/src/main/java/$PKG_PATH"
           mkdir -p "$PROJECT/app/src/main/res/values"
+          mkdir -p "$PROJECT/app/src/main/res/mipmap-hdpi"
           mkdir -p "$PROJECT/app/src/main/assets"
           mkdir -p "$PROJECT/app/src/main/python"
 
-          # ================= 1. Gradle Setup & Default Libraries =================
+          # 2. تحميل صورة بايثون الافتراضية
+          echo "Downloading default Python icon..."
+          curl -L --fail -o /tmp/icon.png "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.png" || true
+
+          # 3. إعدادات Gradle
           cat > "$PROJECT/settings.gradle" << 'EOF'
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal(); maven { url "https://chaquo.com/maven" } }
@@ -93,7 +99,7 @@ jobs:
                   versionName "1.0"
                   ndk { abiFilters "arm64-v8a", "x86_64" }
                   python {
-                      version "3.11" // إصدار مستقر ومدعوم
+                      version "3.11"
                       buildPython "python3"
                       pip {
                           install "requests"
@@ -105,7 +111,7 @@ jobs:
                           install "telethon"
                           install "pycryptodome"
                           install "pillow"
-                          install "pip" // لتثبيت الحزم النقية ديناميكياً
+                          install "pip"
                       }
                   }
               }
@@ -119,7 +125,7 @@ jobs:
           EOF
           sed -i "s/PKG_NAME_PLACEHOLDER/$PKG_NAME/g" "$PROJECT/app/build.gradle"
 
-          # ================= 2. Python Backend (runner.py) =================
+          # 4. كود البايثون الأساسي (Backend)
           cat > "$PROJECT/app/src/main/python/runner.py" << 'PYEOF'
           import os, sys, json, zipfile, shutil, runpy, traceback, io, base64, subprocess
 
@@ -233,7 +239,7 @@ jobs:
                   return f"Pip Error: {e}"
           PYEOF
 
-          # ================= 3. Java Bridge & Services =================
+          # 5. خدمات الجافا (Foreground Service + Bridge)
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/PythonService.java" << 'JAVAEOF'
           package __PKG__;
           import android.app.*; import android.content.Intent; import android.os.Build; import android.os.IBinder;
@@ -341,7 +347,7 @@ jobs:
           }
           JAVAEOF
 
-          # ================= 4. Manifest =================
+          # 6. ملف الـ Manifest
           cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -357,7 +363,7 @@ jobs:
           </manifest>
           EOF
 
-          # ================= 5. Frontend IDE =================
+          # 7. واجهة المستخدم (Frontend)
           cat > "$PROJECT/app/src/main/assets/index.html" << 'HTMLEOF'
           <!DOCTYPE html>
           <html lang="ar" dir="ltr">
@@ -644,9 +650,8 @@ jobs:
           </html>
           HTMLEOF
 
-          if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; else
-            printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"
-          fi
+          # 8. وضع الأيقونة في مكانها
+          if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; fi
 
       - name: Build APK
         run: |
