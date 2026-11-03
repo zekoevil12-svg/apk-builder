@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="ar" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050505">
+<title>PyServer | Cloud IDE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<style>
+:root {
+  --bg: #050505;
+  --panel: #0a0a0c;
+  --panel2: #111116;
+  --line: #1f1f2e;
+  --txt: #e2e8f0;
+  --dim: #64748b;
+  --acc: #00ffcc; /* Neon Cyan */
+  --acc-glow: rgba(0, 255, 204, 0.3);
+  --err: #ff3366;
+  --warn: #ffaa00;
+  --ok: #00ff66;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); color: var(--txt); font-family: 'Cairo', system-ui, sans-serif; overflow: hidden; }
+button { font-family: inherit; cursor: pointer; color: inherit; outline: none; }
+
+/* Layout Grid */
+body { display: grid; grid-template-rows: 56px 1fr 28px; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line); box-shadow: 0 4px 20px rgba(0,0,0,0.5); z-index: 10; }
+main { display: grid; grid-template-columns: 260px 1fr 240px; min-height: 0; position: relative; }
+
+/* Header / Nav */
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; color: #fff; letter-spacing: 1px; }
+.brand i { color: var(--acc); font-style: normal; text-shadow: 0 0 10px var(--acc-glow); font-size: 24px; }
+.status-badge { display: flex; align-items: center; gap: 8px; font-size: 13px; background: var(--panel2); padding: 6px 12px; border-radius: 20px; border: 1px solid var(--line); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+.dot.online { background: var(--ok); box-shadow: 0 0 8px var(--ok); animation: pulse 2s infinite; }
+.dot.running { background: var(--acc); box-shadow: 0 0 10px var(--acc); }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+/* Power Controls */
+.controls { display: flex; gap: 8px; align-items: center; }
+.btn-power { border: 1px solid var(--line); background: var(--panel2); padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; transition: 0.2s; }
+.btn-power.start { border-color: var(--ok); color: var(--ok); }
+.btn-power.start:hover:not(:disabled) { background: rgba(0,255,102,0.1); box-shadow: 0 0 15px rgba(0,255,102,0.2); }
+.btn-power.stop { border-color: var(--err); color: var(--err); }
+.btn-power.stop:hover:not(:disabled) { background: rgba(255,51,102,0.1); box-shadow: 0 0 15px rgba(255,51,102,0.2); }
+.btn-power:disabled { opacity: 0.3; cursor: not-allowed; filter: grayscale(1); }
+
+/* Sidebars */
+aside { background: var(--panel); display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+aside.right { border-right: none; border-left: 1px solid var(--line); }
+.side-header { padding: 12px 16px; font-size: 12px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--line); background: var(--panel2); }
+.side-actions button { background: none; border: none; color: var(--dim); font-size: 16px; cursor: pointer; padding: 4px; border-radius: 4px; transition: 0.2s; }
+.side-actions button:hover { color: var(--acc); background: rgba(0,255,204,0.1); }
+
+/* File Tree */
+#tree { flex: 1; overflow: auto; padding: 8px 0; }
+.node { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 16px; font-size: 13px; font-family: var(--mono); cursor: pointer; transition: 0.1s; color: #cbd5e1; }
+.node:hover { background: var(--panel2); color: #fff; }
+.node.active { background: rgba(0, 255, 204, 0.1); color: var(--acc); border-left: 2px solid var(--acc); }
+.node .icon { font-size: 14px; }
+.node .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .actions { display: none; gap: 4px; }
+.node:hover .actions { display: flex; }
+.node .actions span { font-size: 12px; color: var(--dim); padding: 2px 4px; border-radius: 3px; }
+.node .actions span:hover { color: var(--txt); background: rgba(255,255,255,0.1); }
+
+/* Center Area */
+#center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.tabs-bar { display: flex; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; min-height: 42px; }
+.tab { display: flex; align-items: center; gap: 8px; padding: 0 16px; font-size: 13px; font-family: var(--mono); color: var(--dim); cursor: pointer; border-right: 1px solid var(--line); border-top: 2px solid transparent; white-space: nowrap; transition: 0.2s; }
+.tab:hover { background: var(--panel2); color: #fff; }
+.tab.active { background: var(--bg); color: var(--acc); border-top-color: var(--acc); }
+.tab .close { font-size: 14px; opacity: 0.5; padding: 2px 6px; border-radius: 4px; }
+.tab .close:hover { background: rgba(255,51,102,0.2); color: var(--err); opacity: 1; }
+
+/* Editor & Terminal Split */
+.work-area { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.editor-container { flex: 1; position: relative; min-height: 0; display: none; }
+.editor-container.active { display: block; }
+.CodeMirror { height: 100% !important; font-family: var(--mono) !important; font-size: 14px !important; background: var(--bg) !important; }
+.CodeMirror-gutters { background: var(--bg) !important; border-right: 1px solid var(--line) !important; }
+
+/* Terminal Area */
+.terminal-panel { height: 35%; min-height: 150px; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: #000; position: relative; }
+.terminal-tabs { display: flex; background: var(--panel2); border-bottom: 1px solid var(--line); padding: 0 8px; }
+.terminal-tabs button { background: none; border: none; color: var(--dim); padding: 8px 16px; font-size: 12px; font-weight: 600; border-bottom: 2px solid transparent; cursor: pointer; }
+.terminal-tabs button.active { color: var(--acc); border-bottom-color: var(--acc); }
+.terminal-output { flex: 1; overflow-y: auto; padding: 12px; font-family: var(--mono); font-size: 13px; line-height: 1.6; direction: ltr; text-align: left; color: #a8b2c1; }
+.terminal-output .log-time { color: #475569; margin-right: 8px; font-size: 11px; }
+.terminal-output .log-info { color: var(--acc); }
+.terminal-output .log-err { color: var(--err); }
+.terminal-output .log-cmd { color: #fbbf24; }
+.terminal-input-line { display: flex; align-items: center; padding: 8px 12px; background: var(--panel2); border-top: 1px solid var(--line); font-family: var(--mono); font-size: 13px; }
+.terminal-input-line .prompt { color: var(--acc); margin-right: 10px; font-weight: 700; }
+.terminal-input-line input { flex: 1; background: transparent; border: none; color: #fff; outline: none; font-family: inherit; font-size: inherit; }
+
+/* Right Sidebar (Stats) */
+.stat-group { padding: 16px; border-bottom: 1px solid var(--line); }
+.stat-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--dim); margin-bottom: 6px; text-transform: uppercase; }
+.stat-bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; }
+.stat-fill { height: 100%; background: var(--acc); width: 0%; transition: width 0.5s ease, background 0.3s; box-shadow: 0 0 10px var(--acc-glow); }
+.stat-fill.warn { background: var(--warn); }
+.stat-fill.danger { background: var(--err); }
+.sys-info { font-size: 12px; color: #94a3b8; line-height: 2; }
+.sys-info span { color: var(--txt); font-family: var(--mono); float: right; }
+
+/* Footer */
+footer { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); font-family: var(--mono); }
+
+/* Misc */
+.hidden { display: none !important; }
+#toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--panel2); border: 1px solid var(--acc); color: var(--acc); padding: 10px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; opacity: 0; transition: 0.3s; pointer-events: none; z-index: 100; box-shadow: 0 4px 20px rgba(0,255,204,0.2); }
+#toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+#splash { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; }
+.spinner { width: 50px; height: 50px; border: 3px solid var(--line); border-top-color: var(--acc); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Modals for prompts */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; place-items: center; z-index: 1000; backdrop-filter: blur(4px); }
+.modal.on { display: grid; }
+.modal-content { background: var(--panel); border: 1px solid var(--line); padding: 24px; border-radius: 12px; width: 300px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.modal-content h3 { font-size: 16px; margin-bottom: 16px; color: #fff; }
+.modal-content input { width: 100%; background: var(--bg); border: 1px solid var(--line); padding: 10px; border-radius: 6px; color: #fff; font-family: inherit; outline: none; margin-bottom: 16px; }
+.modal-content input:focus { border-color: var(--acc); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.modal-actions button { padding: 8px 16px; border-radius: 6px; border: none; font-weight: 600; font-family: inherit; cursor: pointer; }
+.modal-actions .btn-cancel { background: var(--panel2); color: var(--txt); }
+.modal-actions .btn-ok { background: var(--acc); color: #000; }
+
+/* Responsive */
+@media(max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  aside { display: none; }
+  #burger { display: block; }
+}
+</style>
+</head>
+<body>
+
+<!-- Splash Screen -->
+<div id="splash">
+  <div class="spinner"></div>
+  <div style="font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 8px;">Initializing Cloud Environment</div>
+  <div style="color: var(--dim); font-family: var(--mono); font-size: 12px;" id="splashMsg">Downloading Pyodide core...</div>
+</div>
+
+<!-- Custom Prompt Modal -->
+<div class="modal" id="promptModal">
+  <div class="modal-content">
+    <h3 id="promptTitle">Enter Name</h3>
+    <input type="text" id="promptInput" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closePrompt()">إلغاء</button>
+      <button class="btn-ok" onclick="submitPrompt()">موافق</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Header -->
+<header>
+  <div style="display: flex; align-items: center; gap: 16px;">
+    <div class="brand"><i>⬢</i> PyServer</div>
+    <div class="status-badge">
+      <span class="dot online" id="sysDot"></span>
+      <span id="sysStatus">System Ready</span>
+    </div>
+  </div>
+  
+  <div class="controls">
+    <button class="btn-power start" id="btnRun" onclick="runMain()">▶ START</button>
+    <button class="btn-power stop" id="btnStop" onclick="requestInterrupt()" disabled>⏹ STOP</button>
+    <button class="btn-power" onclick="installReq()" style="border-color:var(--warn); color:var(--warn);">📦 PIP INSTALL</button>
+    <button class="btn-power" onclick="downloadProject()" style="border-color:var(--dim); color:var(--txt);">⬇ EXPORT ZIP</button>
+  </div>
+</header>
+
+<main>
+  <!-- Left Sidebar: File Manager -->
+  <aside class="left">
+    <div class="side-header">
+      <span>📁 File Manager</span>
+      <div class="side-actions">
+        <button onclick="newItem('file')" title="New File">📄+</button>
+        <button onclick="newItem('dir')" title="New Folder">📁+</button>
+        <button onclick="document.getElementById('fileIn').click()" title="Upload">⬆</button>
+      </div>
+    </div>
+    <div id="tree"></div>
+  </aside>
+
+  <!-- Center: Editor & Terminal -->
+  <section id="center">
+    <div class="tabs-bar" id="tabs"></div>
+    
+    <div class="work-area">
+      <!-- Editor -->
+      <div class="editor-container" id="editorHost">
+        <textarea id="codeEditor"></textarea>
+      </div>
+      
+      <!-- Empty State -->
+      <div class="editor-container active" id="emptyState" style="display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--dim); background: var(--bg);">
+        <div style="font-size: 48px; margin-bottom: 16px;">⬢</div>
+        <div>Select a file to edit or create a new one</div>
+      </div>
+
+      <!-- Terminal -->
+      <div class="terminal-panel">
+        <div class="terminal-tabs">
+          <button class="active" onclick="switchTerminalTab('console')">TERMINAL</button>
+          <button onclick="switchTerminalTab('results')">OUTPUT / GRAPHS</button>
+          <button style="margin-left: auto; color: var(--dim);" onclick="clearTerminal()">🗑 CLEAR</button>
+        </div>
+        <div class="terminal-output" id="terminalOut"></div>
+        <div class="terminal-output hidden" id="resultsOut" style="background: #fff;"></div>
+        
+        <div class="terminal-input-line" id="terminalInputLine">
+          <span class="prompt" id="termPrompt">root@server:~#</span>
+          <input type="text" id="cmdInput" placeholder="Type command (help)..." autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right Sidebar: Server Stats -->
+  <aside class="right">
+    <div class="side-header"><span>📊 System Monitor</span></div>
+    
+    <div class="stat-group">
+      <div class="stat-label"><span>CPU Usage</span><span id="cpuVal">0%</span></div>
+      <div class="stat-bar"><div class="stat-fill" id="cpuBar"></div></div>
+    </div>
+    <div class="stat-group">
+      <div class="stat-label"><span>Memory (RAM)</span><span id="ramVal">0 MB</span></div>
+      <div class="stat-bar"><div class="stat-fill" id="ramBar"></div></div>
+    </div>
+    
+    <div class="side-header" style="margin-top: 10px;"><span>⚙️ Server Info</span></div>
+    <div class="stat-group sys-info">
+      <div>Kernel <span id="infoPy">Python 3.x</span></div>
+      <div>Engine <span id="infoEngine">Pyodide</span></div>
+      <div>Uptime <span id="infoUptime">0m 0s</span></div>
+      <div>Status <span id="infoStatus" style="color: var(--ok);">IDLE</span></div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <div id="editorStatus">Line 1, Col 1</div>
+  <div>Cloud Environment Ready</div>
+</footer>
+
+<!-- Hidden Inputs -->
+<input type="file" id="fileIn" multiple hidden>
+<input type="file" id="dirIn" webkitdirectory hidden>
+
+<!-- Scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+
+<script>
+// --- Core Variables ---
+const ROOT = '/home/pyodide/proj';
+const $ = s => document.querySelector(s);
+const enc = new TextEncoder(), dec = new TextDecoder();
+const PIP_MAP = { PIL:'pillow', yaml:'pyyaml', sklearn:'scikit-learn', bs4:'beautifulsoup4', cv2:'opencv-python', Crypto:'pycryptodome' };
+
+let py, FS, cwd = ROOT, projectDir = ROOT;
+let activeFile = null;
+let editor = null;
+let isRunning = false;
+let isReady = false;
+
+// Worker for Interrupts
+let worker, interruptBuffer;
+
+// Stats Simulation
+let startTime = Date.now();
+let cpuUsage = 0;
+let ramUsage = 0;
+
+// Prompt Modal state
+let promptCallback = null;
+
+// --- Utilities ---
+const pad = (n) => String(n).padStart(2, '0');
+const getTime = () => {
+    const d = new Date();
+    return `[${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}]`;
+};
+
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const base = p => p.split('/').pop(), dirname = p => p.slice(0, p.lastIndexOf('/')) || '/';
+const norm = p => { const o = []; for (const s of p.split('/')) { if (!s || s === '.') continue; s === '..' ? o.pop() : o.push(s); } return '/' + o.join('/'); };
+const resolve = p => norm(p.startsWith('/') ? p : cwd + '/' + p);
+const exists = p => { try { FS.stat(p); return true; } catch { return false; } };
+const isDir = p => { try { return FS.isDir(FS.stat(p).mode); } catch { return false; } };
+
+function mkdirp(p) { let cur = ''; for (const s of p.split('/').filter(Boolean)) { cur += '/' + s; if (!exists(cur)) FS.mkdir(cur); } }
+function rmrf(p) { if (isDir(p)) { for (const n of FS.readdir(p)) { if (n === '.' || n === '..') continue; rmrf(p + '/' + n); } FS.rmdir(p); } else FS.unlink(p); }
+
+function showToast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+    clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('on'), 3000);
+}
+
+// Custom Prompt
+function customPrompt(title, defaultVal, cb) {
+    $('#promptTitle').textContent = title;
+    $('#promptInput').value = defaultVal || '';
+    $('#promptModal').classList.add('on');
+    $('#promptInput').focus();
+    promptCallback = cb;
+}
+function closePrompt() { $('#promptModal').classList.remove('on'); promptCallback = null; }
+function submitPrompt() {
+    const val = $('#promptInput').value.trim();
+    if (promptCallback) promptCallback(val);
+    closePrompt();
+}
+
+// --- Logging ---
+function logTerminal(msg, type = 'info') {
+    const out = $('#terminalOut');
+    const line = document.createElement('div');
+    let cls = '';
+    if (type === 'err') cls = 'log-err';
+    if (type === 'cmd') cls = 'log-cmd';
+    
+    line.innerHTML = `<span class="log-time">${getTime()}</span><span class="${cls}">${esc(msg)}</span>`;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+}
+
+function clearTerminal() {
+    $('#terminalOut').innerHTML = '';
+    $('#resultsOut').innerHTML = '';
+    logTerminal('Terminal cleared.', 'info');
+}
+
+function switchTerminalTab(tab) {
+    document.querySelectorAll('.terminal-tabs button').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    if (tab === 'console') {
+        $('#terminalOut').classList.remove('hidden');
+        $('#resultsOut').classList.add('hidden');
+        $('#terminalInputLine').style.display = 'flex';
+    } else {
+        $('#terminalOut').classList.add('hidden');
+        $('#resultsOut').classList.remove('hidden');
+        $('#terminalInputLine').style.display = 'none';
+    }
+}
+
+// --- System Stats ---
+setInterval(() => {
+    if (!isReady) return;
+    
+    // Uptime
+    const sec = Math.floor((Date.now() - startTime) / 1000);
+    $('#infoUptime').textContent = `${Math.floor(sec/60)}m ${sec%60}s`;
+
+    // Simulated CPU/RAM
+    if (isRunning) {
+        cpuUsage = Math.floor(Math.random() * 40) + 50; // 50-90%
+        ramUsage = Math.floor(Math.random() * 100) + 200; // 200-300 MB
+    } else {
+        cpuUsage = Math.floor(Math.random() * 5) + 2; // 2-7%
+        ramUsage = Math.floor(Math.random() * 20) + 80; // 80-100 MB
+    }
+
+    $('#cpuVal').textContent = `${cpuUsage}%`;
+    $('#cpuBar').style.width = `${cpuUsage}%`;
+    if (cpuUsage > 80) { $('#cpuBar').className = 'stat-fill danger'; }
+    else if (cpuUsage > 60) { $('#cpuBar').className = 'stat-fill warn'; }
+    else { $('#cpuBar').className = 'stat-fill'; }
+
+    $('#ramVal').textContent = `${ramUsage} MB`;
+    $('#ramBar').style.width = `${(ramUsage/512)*100}%`;
+
+}, 2000);
+
+// --- Initialization ---
+async function boot() {
+    try {
+        // 1. Init CodeMirror
+        editor = CodeMirror.fromTextArea($('#codeEditor'), {
+            mode: 'python', theme: 'material-darker', lineNumbers: true,
+            indentUnit: 4, tabSize: 4, indentWithTabs: false, autoCloseBrackets: true,
+            extraKeys: { Tab: c => c.somethingSelected() ? c.indentSelection('add') : c.replaceSelection('    ', 'end') }
+        });
+        editor.on('cursorActivity', () => {
+            const pos = editor.getCursor();
+            $('#editorStatus').textContent = `Line ${pos.line+1}, Col ${pos.ch+1}`;
+        });
+
+        // 2. Init Worker for Interrupts
+        if (typeof SharedArrayBuffer !== 'undefined') {
+            worker = new Worker('data:text/javascript;base64,' + btoa(`
+                self.importScripts('https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js');
+                let pyPromise = loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/' });
+                self.onmessage = async (e) => {
+                    if (e.data.cmd === 'setInterruptBuffer') {
+                        const py = await pyPromise;
+                        py.setInterruptBuffer(e.data.buffer);
+                    }
+                };
+            `));
+            interruptBuffer = new Uint8Array(new SharedArrayBuffer(1));
+            worker.postMessage({ cmd: 'setInterruptBuffer', buffer: interruptBuffer });
+        } else {
+            logTerminal('Warning: SharedArrayBuffer not supported. Stop button disabled.', 'err');
+        }
+
+        // 3. Load Pyodide
+        $('#splashMsg').textContent = 'Downloading Python Core...';
+        py = await loadPyodide({
+            stdout: (l) => { logTerminal(l, 'info'); },
+            stderr: (l) => { logTerminal(l, 'err'); }
+        });
+        FS = py.FS;
+        
+        $('#splashMsg').textContent = 'Mounting File System...';
+        mkdirp(ROOT);
+        try { FS.mount(FS.filesystems.IDBFS, {}, ROOT); await new Promise(r => FS.syncfs(true, r)); } catch(e) {}
+        
+        py.setStdin({ stdin: () => { 
+            // Basic prompt for input()
+            return window.prompt('Python input():'); 
+        }});
+
+        // 4. Setup helper functions inside Python
+        py.runPython(`
+import sys, os, runpy, traceback, io, importlib
+ROOT='${ROOT}'
+os.environ['MPLBACKEND']='AGG'
+def _run(path):
+    d=os.path.dirname(path)
+    os.chdir(d)
+    if d not in sys.path: sys.path.insert(0,d)
+    importlib.invalidate_caches()
+    sys.argv=[path]
+    try:
+        runpy.run_path(path, run_name='__main__')
+    except SystemExit:
+        pass
+    except BaseException:
+        print(traceback.format_exc(), file=sys.stderr)
+def _figs():
+    out=[]
+    if 'matplotlib.pyplot' in sys.modules:
+        import matplotlib.pyplot as plt
+        for n in plt.get_fignums():
+            b=io.StringIO(); plt.figure(n).savefig(b,format='svg'); out.append(b.getvalue())
+        plt.close('all')
+    return out
+`);
+        
+        // 5. Create sample files
+        if (FS.readdir(ROOT).filter(n => n !== '.' && n !== '..').length === 0) {
+            FS.writeFile(ROOT + '/main.py', enc.encode(`import time\nprint("Starting server...")\nfor i in range(5):\n    print(f"Tick {i}")\n    time.sleep(1)\nprint("Server started!")\n`));
+            FS.writeFile(ROOT + '/requirements.txt', enc.encode('# requests\n'));
+        }
+
+        // 6. Finish
+        $('#infoPy').textContent = 'Python ' + py.runPython('import sys;sys.version.split()[0]');
+        $('#splash').classList.add('hidden');
+        isReady = true;
+        refreshTree();
+        logTerminal('System initialized successfully.', 'info');
+        logTerminal('Type "help" for a list of commands.', 'info');
+        
+    } catch (err) {
+        $('#splash').innerHTML = `<div style="color:var(--err); font-size:20px;">Fatal Error: ${esc(err.message)}</div>`;
+    }
+}
+
+// --- File Manager ---
+function refreshTree() {
+    const buildTree = (dir, depth = 0) => {
+        let html = '';
+        const items = FS.readdir(dir).filter(n => n !== '.' && n !== '..' && n !== '__pycache__').map(n => ({ n, p: dir + '/' + n, d: isDir(dir + '/' + n) }));
+        items.sort((a, b) => (b.d - a.d) || a.n.localeCompare(b.n));
+        
+        for (const it of items) {
+            const isAct = activeFile === it.p;
+            const icon = it.d ? '📁' : (it.n.endsWith('.py') ? '🐍' : '📄');
+            
+            html += `<div class="node ${isAct ? 'active' : ''}" onclick="onTreeClick('${esc(it.p)}', ${it.d})" style="padding-left: ${12 + depth * 16}px">
+                <span class="icon">${icon}</span>
+                <span class="name">${esc(it.n)}</span>
+                <span class="actions" onclick="event.stopPropagation();">
+                    ${it.d ? '' : `<span onclick="downloadFile('${esc(it.p)}')" title="Download">⬇</span>`}
+                    <span onclick="deleteNode('${esc(it.p)}')" title="Delete">🗑</span>
+                </span>
+            </div>`;
+            if (it.d) html += buildTree(it.p, depth + 1);
+        }
+        return html;
+    };
+    $('#tree').innerHTML = buildTree(ROOT);
+}
+
+function onTreeClick(path, isDirectory) {
+    if (isDirectory) return; // Ignore folder clicks for now
+    openFile(path);
+}
+
+function openFile(path) {
+    activeFile = path;
+    refreshTree();
+    
+    const bytes = FS.readFile(path);
+    const content = dec.decode(bytes);
+    
+    editor.setValue(content);
+    $('#emptyState').classList.add('hidden');
+    $('#editorHost').classList.add('active');
+    
+    // Update Tabs
+    $('#tabs').innerHTML = `<div class="tab active"><span class="icon">🐍</span><span>${base(path)}</span><span class="close" onclick="event.stopPropagation(); closeTab()">×</span></div>`;
+    
+    setTimeout(() => editor.refresh(), 10);
+}
+
+function closeTab() {
+    activeFile = null;
+    editor.setValue('');
+    $('#tabs').innerHTML = '';
+    $('#editorHost').classList.remove('active');
+    $('#emptyState').classList.remove('hidden');
+    refreshTree();
+}
+
+function newItem(type) {
+    customPrompt(type === 'file' ? 'New File Name' : 'New Folder Name', type === 'file' ? 'script.py' : 'folder', (name) => {
+        if (!name) return;
+        const p = resolve(name);
+        if (exists(p)) return showToast('Already exists!');
+        
+        if (type === 'dir') {
+            FS.mkdir(p);
+        } else {
+            FS.writeFile(p, enc.encode(''));
+            openFile(p);
+        }
+        refreshTree();
+        FS.syncfs(false, () => {});
+    });
+}
+
+function deleteNode(path) {
+    if (!confirm(`Delete ${path}?`)) return;
+    rmrf(path);
+    if (activeFile === path) closeTab();
+    refreshTree();
+    FS.syncfs(false, () => {});
+}
+
+function downloadFile(path) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([FS.readFile(path)]));
+    a.download = base(path);
+    a.click();
+}
+
+// File Uploads
+$('#fileIn').onchange = async e => {
+    for (const f of e.target.files) {
+        const p = resolve(f.name);
+        if (f.name.endsWith('.zip')) {
+            // Extract zip
+            const z = await JSZip.loadAsync(f);
+            for (const fn in z.files) {
+                if (z.files[fn].dir) continue;
+                const data = await z.files[fn].async('uint8array');
+                mkdirp(dirname(ROOT + '/' + fn));
+                FS.writeFile(ROOT + '/' + fn, data);
+            }
+            logTerminal(`Extracted ZIP: ${f.name}`, 'info');
+        } else {
+            FS.writeFile(p, new Uint8Array(await f.arrayBuffer()));
+            logTerminal(`Uploaded: ${f.name}`, 'info');
+        }
+    }
+    refreshTree();
+    FS.syncfs(false, () => {});
+    e.target.value = '';
+};
+
+function downloadProject() {
+    const zip = new JSZip();
+    const addFolder = (dir, folder) => {
+        for (const n of FS.readdir(dir)) {
+            if (n === '.' || n === '..' || n === '__pycache__') continue;
+            const p = dir + '/' + n;
+            if (isDir(p)) {
+                addFolder(p, folder.folder(n));
+            } else {
+                folder.file(n, FS.readFile(p));
+            }
+        }
+    };
+    addFolder(ROOT, zip);
+    zip.generateAsync({ type: 'blob' }).then(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'project.zip';
+        a.click();
+    });
+}
+
+// --- Execution ---
+function setRunningUI(running) {
+    isRunning = running;
+    $('#btnRun').disabled = running;
+    $('#btnStop').disabled = !running;
+    $('#infoStatus').textContent = running ? 'RUNNING' : 'IDLE';
+    $('#infoStatus').style.color = running ? 'var(--acc)' : 'var(--ok)';
+    $('#sysStatus').textContent = running ? 'Executing Script' : 'System Ready';
+    $('#sysDot').className = `dot ${running ? 'running' : 'online'}`;
+}
+
+async function runMain() {
+    if (isRunning) return;
+    
+    // Find main.py
+    let target = ROOT + '/main.py';
+    if (!exists(target)) {
+        if (activeFile && activeFile.endsWith('.py')) target = activeFile;
+        else return showToast('No main.py found and no python file selected.');
+    }
+
+    if (activeFile === target) {
+        FS.writeFile(target, enc.encode(editor.getValue())); // Save current changes
+    }
+
+    setRunningUI(true);
+    logTerminal(`Executing: ${base(target)}`, 'cmd');
+    
+    // Switch to terminal view
+    $('#terminalOut').classList.remove('hidden');
+    $('#resultsOut').classList.add('hidden');
+
+    try {
+        const t0 = performance.now();
+        py.globals.get('_run')(target);
+        
+        // Handle plots
+        const r = py.globals.get('_figs')();
+        const figs = r.toJs();
+        r.destroy();
+        
+        if (figs.length > 0) {
+            $('#resultsOut').innerHTML = '';
+            figs.forEach(f => {
+                const div = document.createElement('div');
+                div.innerHTML = f;
+                $('#resultsOut').appendChild(div);
+            });
+            logTerminal('Graph generated. Check OUTPUT tab.', 'info');
+        }
+        
+        const time = ((performance.now() - t0) / 1000).toFixed(2);
+        logTerminal(`Process finished with exit code 0 (${time}s)`, 'info');
+
+    } catch (e) {
+        logTerminal(String(e.message || e), 'err');
+    } finally {
+        setRunningUI(false);
+        refreshTree();
+    }
+}
+
+function requestInterrupt() {
+    if (interruptBuffer) {
+        interruptBuffer[0] = 2; // SIGINT
+        logTerminal('SIGINT received. Stopping process...', 'err');
+    }
+}
+
+async function installReq() {
+    if (isRunning) return;
+    const reqFile = ROOT + '/requirements.txt';
+    if (!exists(reqFile)) return showToast('requirements.txt not found.');
+    
+    const pkgs = dec.decode(FS.readFile(reqFile)).split('\n').map(x => x.trim()).filter(x => x && !x.startsWith('#'));
+    if (!pkgs.length) return showToast('No packages to install.');
+    
+    setRunningUI(true);
+    logTerminal(`Starting pip install for ${pkgs.length} packages...`, 'cmd');
+    
+    await py.loadPackage('micropip');
+    const micropip = py.pyimport('micropip');
+    
+    for (const pkg of pkgs) {
+        logTerminal(`Installing ${pkg}...`, 'info');
+        try {
+            await micropip.install(pkg);
+            logTerminal(`Successfully installed ${pkg}`, 'info');
+        } catch (e) {
+            logTerminal(`Failed to install ${pkg}: ${e.message}`, 'err');
+        }
+    }
+    
+    logTerminal('Pip install complete.', 'info');
+    setRunningUI(false);
+}
+
+// --- Terminal Input ---
+$('#cmdInput').addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    const cmd = e.target.value.trim();
+    if (!cmd) return;
+    e.target.value = '';
+    
+    logTerminal(cmd, 'cmd');
+    
+    // Simple command router
+    if (cmd === 'help') {
+        logTerminal('Commands: ls, cd, cat, rm, clear, python <file>, pip install <pkg>', 'info');
+    } else if (cmd === 'ls') {
+        logTerminal(FS.readdir(cwd).join('  '), 'info');
+    } else if (cmd === 'clear') {
+        clearTerminal();
+    } else if (cmd.startsWith('pip install ')) {
+        const pkg = cmd.replace('pip install ', '');
+        await py.loadPackage('micropip');
+        try {
+            await py.pyimport('micropip').install(pkg);
+            logTerminal(`Installed ${pkg}`, 'info');
+        } catch (err) { logTerminal(String(err), 'err'); }
+    } else if (cmd.startsWith('python ')) {
+        const f = cmd.replace('python ', '');
+        if (exists(resolve(f))) {
+            setRunningUI(true);
+            try { py.globals.get('_run')(resolve(f)); } catch (err) { logTerminal(String(err), 'err'); }
+            setRunningUI(false);
+        } else { logTerminal('File not found.', 'err'); }
+    } else {
+        logTerminal(`Command not found: ${cmd}`, 'err');
+    }
+});
+
+// Start
+boot();
+</script>
+</body>
+</html>
