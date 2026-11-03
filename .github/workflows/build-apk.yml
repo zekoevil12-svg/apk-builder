@@ -59,7 +59,7 @@ jobs:
           PROJECT=/tmp/app
           PKG_PATH=$(echo "$PKG_NAME" | tr '.' '/')
 
-          # 1. إنشاء المجلدات الأساسية (تم إضافة مجلد الأيقونة هنا لحل المشكلة)
+          # 1. إنشاء المجلدات الأساسية
           mkdir -p "$PROJECT/app/src/main/java/$PKG_PATH"
           mkdir -p "$PROJECT/app/src/main/res/values"
           mkdir -p "$PROJECT/app/src/main/res/mipmap-hdpi"
@@ -67,13 +67,25 @@ jobs:
           mkdir -p "$PROJECT/app/src/main/python"
 
           # 2. تحميل صورة بايثون الافتراضية
-          echo "Downloading default Python icon..."
           curl -L --fail -o /tmp/icon.png "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.png" || true
 
-          # 3. إعدادات Gradle
+          # 3. إعدادات Gradle (تم إضافة dependencyResolutionManagement لحل مشكلة المستودعات)
           cat > "$PROJECT/settings.gradle" << 'EOF'
           pluginManagement {
-              repositories { google(); mavenCentral(); gradlePluginPortal(); maven { url "https://chaquo.com/maven" } }
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+                  maven { url "https://chaquo.com/maven" }
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url "https://chaquo.com/maven" }
+              }
           }
           rootProject.name = "PyIDEApp"
           include ':app'
