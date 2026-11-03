@@ -104,6 +104,13 @@ jobs:
           }
           EOF
 
+          # 4. تفعيل دعم AndroidX (حل جذري للمشكلة)
+          cat > "$PROJECT/gradle.properties" << 'EOF'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          EOF
+
           cat > "$PROJECT/app/build.gradle" << 'EOF'
           plugins { id 'com.android.application'; id 'com.chaquo.python' }
           android {
@@ -143,7 +150,7 @@ jobs:
           EOF
           sed -i "s/PKG_NAME_PLACEHOLDER/$PKG_NAME/g" "$PROJECT/app/build.gradle"
 
-          # 4. كود البايثون الأساسي (Backend)
+          # 5. كود البايثون الأساسي (Backend)
           cat > "$PROJECT/app/src/main/python/runner.py" << 'PYEOF'
           import os, sys, json, zipfile, shutil, runpy, traceback, io, base64, subprocess
 
@@ -257,7 +264,7 @@ jobs:
                   return f"Pip Error: {e}"
           PYEOF
 
-          # 5. خدمات الجافا (Foreground Service + Bridge)
+          # 6. خدمات الجافا (Foreground Service + Bridge)
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/PythonService.java" << 'JAVAEOF'
           package __PKG__;
           import android.app.*; import android.content.Intent; import android.os.Build; import android.os.IBinder;
@@ -365,7 +372,7 @@ jobs:
           }
           JAVAEOF
 
-          # 6. ملف الـ Manifest
+          # 7. ملف الـ Manifest
           cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -381,7 +388,7 @@ jobs:
           </manifest>
           EOF
 
-          # 7. واجهة المستخدم (Frontend)
+          # 8. واجهة المستخدم (Frontend)
           cat > "$PROJECT/app/src/main/assets/index.html" << 'HTMLEOF'
           <!DOCTYPE html>
           <html lang="ar" dir="ltr">
@@ -668,7 +675,7 @@ jobs:
           </html>
           HTMLEOF
 
-          # 8. وضع الأيقونة في مكانها
+          # 9. وضع الأيقونة في مكانها
           if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; fi
 
       - name: Build APK
