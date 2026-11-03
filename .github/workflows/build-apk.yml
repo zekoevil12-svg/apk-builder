@@ -69,7 +69,7 @@ jobs:
           # 2. تحميل صورة بايثون الافتراضية
           curl -L --fail -o /tmp/icon.png "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/python/python-original.png" || true
 
-          # 3. إعدادات Gradle (تم إضافة dependencyResolutionManagement لحل مشكلة المستودعات)
+          # 3. إعدادات Gradle (تم إصلاح المستودعات هنا)
           cat > "$PROJECT/settings.gradle" << 'EOF'
           pluginManagement {
               repositories {
@@ -92,6 +92,12 @@ jobs:
           EOF
 
           cat > "$PROJECT/build.gradle" << 'EOF'
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
           plugins {
               id 'com.android.application' version '8.2.2' apply false
               id 'com.chaquo.python' version '15.0.1' apply false
