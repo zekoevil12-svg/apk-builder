@@ -1,17 +1,21 @@
-name: Build Advanced Python IDE (Terminal + Pip)
+name: Build Advanced Python IDE (Python 3.11)
 
 on:
   workflow_dispatch:
     inputs:
-      app_name:
-        required: true
-        description: 'Python'
       package_name:
+        description: 'اسم الحزمة (مثال: com.my.pyide)'
         required: true
-        description: 'com.my.pyide'
+        default: 'com.pyide.app'
 
 permissions:
   contents: read
+
+env:
+  # ==========================================
+  # ✏️ عدل من هنا: اسم التطبيق
+  APP_NAME: "PyIDE Pro" 
+  # ==========================================
 
 jobs:
   build:
@@ -25,13 +29,13 @@ jobs:
         uses: actions/setup-java@v4
         with: { distribution: 'temurin', java-version: '17' }
 
-      - name: Set up Python (for build)
+      - name: Set up Python (Build Env)
         uses: actions/setup-python@v5
-        with: { python-version: '3.12' } # متوافق مع Chaquopy 17
+        with: { python-version: '3.11' }
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with: { gradle-version: 8.7 } # Chaquopy 17 يدعم Gradle 8.6+
+        with: { gradle-version: 8.7 }
 
       - name: Setup Android SDK
         run: |
@@ -49,7 +53,6 @@ jobs:
 
       - name: Create Android Project
         env:
-          APP_NAME: ${{ inputs.app_name }}
           PKG_NAME: ${{ inputs.package_name }}
         run: |
           set -e
@@ -61,7 +64,7 @@ jobs:
           mkdir -p "$PROJECT/app/src/main/assets"
           mkdir -p "$PROJECT/app/src/main/python"
 
-          # 1. Gradle Setup (Chaquopy 17.1.0 + Python 3.13)
+          # ================= 1. Gradle Setup & Default Libraries =================
           cat > "$PROJECT/settings.gradle" << 'EOF'
           pluginManagement {
               repositories { google(); mavenCentral(); gradlePluginPortal(); maven { url "https://chaquo.com/maven" } }
@@ -73,7 +76,7 @@ jobs:
           cat > "$PROJECT/build.gradle" << 'EOF'
           plugins {
               id 'com.android.application' version '8.2.2' apply false
-              id 'com.chaquo.python' version '17.1.0' apply false
+              id 'com.chaquo.python' version '15.0.1' apply false
           }
           EOF
 
@@ -90,10 +93,9 @@ jobs:
                   versionName "1.0"
                   ndk { abiFilters "arm64-v8a", "x86_64" }
                   python {
-                      version "3.13" // استخدام أحدث إصدار مدعوم
+                      version "3.11" // إصدار مستقر ومدعوم
                       buildPython "python3"
                       pip {
-                          // مكتبات النظام الأساسية (C++ / Native)
                           install "requests"
                           install "numpy"
                           install "pandas"
@@ -103,8 +105,7 @@ jobs:
                           install "telethon"
                           install "pycryptodome"
                           install "pillow"
-                          // تضمين pip لدعم التثبيت الديناميكي للحزم النقية
-                          install "pip"
+                          install "pip" // لتثبيت الحزم النقية ديناميكياً
                       }
                   }
               }
@@ -118,12 +119,9 @@ jobs:
           EOF
           sed -i "s/PKG_NAME_PLACEHOLDER/$PKG_NAME/g" "$PROJECT/app/build.gradle"
 
-          # 2. Python Backend (runner.py) - مع دعم pip والطرفية
+          # ================= 2. Python Backend (runner.py) =================
           cat > "$PROJECT/app/src/main/python/runner.py" << 'PYEOF'
-          import os, sys, json, zipfile, shutil, runpy, traceback, io
-          import base64
-          import subprocess
-          import pip
+          import os, sys, json, zipfile, shutil, runpy, traceback, io, base64, subprocess
 
           WORK_DIR = ""
           LOG_FILE = ""
@@ -136,7 +134,7 @@ jobs:
               os.makedirs(WORK_DIR, exist_ok=True)
               sys.stdout = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
               sys.stderr = sys.stdout
-              print("> System Initialized (Python 3.13 + Pip)")
+              print("> System Initialized (Python 3.11 + Pip)")
 
           def set_main_script(name):
               global MAIN_SCRIPT
@@ -171,6 +169,12 @@ jobs:
                   f.write(data['content'])
               return "OK"
 
+          def write_binary(base64_data, file_name):
+              p = os.path.join(WORK_DIR, file_name)
+              with open(p, "wb") as f:
+                  f.write(base64.b64decode(base64_data))
+              return "OK"
+
           def delete_item(path):
               p = os.path.join(WORK_DIR, path)
               if os.path.isdir(p): shutil.rmtree(p)
@@ -201,11 +205,8 @@ jobs:
               except Exception:
                   traceback.print_exc()
 
-          # --- دوال الطرفية الجديدة ---
           def exec_python(code):
-              """تنفيذ كود بايثون مباشر من الطرفية"""
               try:
-                  # نستخدم exec لتشغيل الكود في مساحة العمل
                   local_vars = {}
                   exec(code, globals(), local_vars)
                   return "OK"
@@ -213,9 +214,7 @@ jobs:
                   return f"Error: {e}"
 
           def exec_system(cmd):
-              """تنفيذ أمر نظام أندرويد (مثل ls, pwd)"""
               try:
-                  # subprocess قد لا يعمل مع كل الأوامر، لكنه يعمل مع أوامر shell الأساسية
                   result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORK_DIR)
                   output = result.stdout + result.stderr
                   return output if output else "OK"
@@ -223,16 +222,18 @@ jobs:
                   return f"System Error: {e}"
 
           def install_pip_package(package_name):
-              """محاولة تثبيت حزمة نقية ديناميكياً"""
               try:
-                  # نحاول التثبيت باستخدام pip المدمج
+                  import pip
+                  old_stdout = sys.stdout
+                  sys.stdout = mystdout = io.StringIO()
                   pip.main(['install', package_name])
-                  return f"OK"
+                  sys.stdout = old_stdout
+                  return f"Output:\n{mystdout.getvalue()}"
               except Exception as e:
                   return f"Pip Error: {e}"
           PYEOF
 
-          # 3. Java Bridge & Services
+          # ================= 3. Java Bridge & Services =================
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/PythonService.java" << 'JAVAEOF'
           package __PKG__;
           import android.app.*; import android.content.Intent; import android.os.Build; import android.os.IBinder;
@@ -340,7 +341,7 @@ jobs:
           }
           JAVAEOF
 
-          # 4. Manifest
+          # ================= 4. Manifest =================
           cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -356,14 +357,14 @@ jobs:
           </manifest>
           EOF
 
-          # 5. Frontend IDE (index.html)
+          # ================= 5. Frontend IDE =================
           cat > "$PROJECT/app/src/main/assets/index.html" << 'HTMLEOF'
           <!DOCTYPE html>
           <html lang="ar" dir="ltr">
           <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-            <title>PyIDE Pro</title>
+            <title>PyIDE</title>
             <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;800&family=Fira+Code&display=swap" rel="stylesheet">
             <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
             <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
@@ -383,7 +384,6 @@ jobs:
               
               .main-layout { flex: 1; display: flex; overflow: hidden; }
               
-              /* Sidebar */
               .sidebar { width: 220px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
               .side-header { padding: 10px; font-size: 12px; font-weight: 700; color: #8b949e; display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); }
               .side-header button { background: none; border: none; color: var(--acc); font-size: 16px; cursor: pointer; }
@@ -394,20 +394,17 @@ jobs:
               .file-item .del { color: var(--err); font-size: 12px; display: none; }
               .file-item:hover .del { display: block; }
               
-              /* Editor Area */
               .editor-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
               #editorHost { flex: 1; overflow: hidden; }
               .CodeMirror { height: 100% !important; font-family: 'Fira Code', monospace !important; font-size: 14px; background: var(--bg) !important; }
               .CodeMirror-gutters { background: var(--bg) !important; border-right: 1px solid var(--border) !important; }
               
-              /* Terminal */
               .terminal { height: 35%; background: #000; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
               .term-header { background: #161b22; padding: 6px 12px; font-size: 12px; color: #8b949e; display: flex; justify-content: space-between; align-items: center; }
               .term-body { flex: 1; padding: 10px; overflow-y: auto; font-family: 'Fira Code', monospace; font-size: 12px; color: #3fb950; direction: ltr; text-align: left; white-space: pre-wrap; }
               .term-body .err { color: var(--err); }
               .term-input { width: 100%; background: #000; border: none; border-top: 1px solid var(--border); color: #fff; padding: 8px 10px; font-family: 'Fira Code', monospace; font-size: 12px; outline: none; }
               
-              /* Settings Panel */
               .settings-panel { width: 250px; background: var(--panel); border-left: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 16px; }
               .settings-panel h3 { font-size: 13px; color: #8b949e; margin-bottom: 6px; }
               .settings-panel input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; }
@@ -415,7 +412,6 @@ jobs:
               
               .lib-tag { background: rgba(88,166,255,0.1); color: var(--acc); border: 1px solid rgba(88,166,255,0.3); padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 11px; display: inline-block; margin: 2px; }
               
-              /* Modal */
               .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; z-index: 999; }
               .modal.on { display: flex; }
               .modal-content { background: var(--panel); padding: 20px; border-radius: 8px; width: 300px; border: 1px solid var(--border); }
@@ -425,7 +421,7 @@ jobs:
           </head>
           <body>
             <header>
-              <div class="logo"><span>⬢</span> PyIDE Pro (Python 3.13)</div>
+              <div class="logo"><span>⬢</span> PyIDE Pro (v3.11)</div>
               <div class="actions">
                 <button class="btn btn-run" id="btnRun" onclick="startServer()">▶ RUN</button>
                 <button class="btn btn-stop" id="btnStop" onclick="stopServer()" disabled>⏹ STOP</button>
@@ -433,7 +429,6 @@ jobs:
             </header>
 
             <div class="main-layout">
-              <!-- File Explorer -->
               <div class="sidebar">
                 <div class="side-header">
                   <span>EXPLORER</span>
@@ -446,39 +441,25 @@ jobs:
                 <div id="fileList"></div>
               </div>
 
-              <!-- Editor & Terminal -->
               <div class="editor-area">
                 <div id="editorHost">
                   <textarea id="codeEditor"></textarea>
                 </div>
                 <div class="terminal">
                   <div class="term-header">
-                    <span>TERMINAL (Python / Shell)</span>
+                    <span>TERMINAL (Python 3.11)</span>
                     <span style="cursor:pointer" onclick="clearLogs()">Clear</span>
                   </div>
                   <div class="term-body" id="termOut">> Waiting for commands...</div>
-                  <input type="text" class="term-input" id="termInput" placeholder="Type Python code or shell command (e.g. print('hi'), ls)..." onkeydown="handleTerminal(event)">
+                  <input type="text" class="term-input" id="termInput" placeholder="Type Python code or shell command..." onkeydown="handleTerminal(event)">
                 </div>
               </div>
 
-              <!-- Settings -->
               <div class="settings-panel">
                 <div>
                   <h3>Main File (ملف التشغيل)</h3>
                   <input type="text" id="mainFileInput" value="main.py">
                   <button onclick="saveMainFile()">تغيير الملف الرئيسي</button>
-                </div>
-                <div>
-                  <h3>المكتبات المثبتة مسبقاً</h3>
-                  <div>
-                    <span class="lib-tag">requests</span>
-                    <span class="lib-tag">numpy</span>
-                    <span class="lib-tag">pandas</span>
-                    <span class="lib-tag">bs4</span>
-                    <span class="lib-tag">flask</span>
-                    <span class="lib-tag">telethon</span>
-                    <span class="lib-tag">pillow</span>
-                  </div>
                 </div>
                 <div>
                   <h3>تثبيت مكتبة نقية (Pip)</h3>
@@ -488,7 +469,6 @@ jobs:
               </div>
             </div>
 
-            <!-- Modals -->
             <div class="modal" id="promptModal">
               <div class="modal-content">
                 <h3 id="promptTitle">Enter Name</h3>
@@ -572,7 +552,6 @@ jobs:
                 else callPython("write_file", JSON.stringify({path: val, content: ''})).then(() => { refreshFiles(); openFile(val); });
               }
 
-              // رفع الملفات
               document.getElementById('fileIn').onchange = function(e) {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -633,7 +612,6 @@ jobs:
                 document.getElementById('termOut').innerText = "> Logs cleared.";
               }
 
-              // --- دالة الطرفية الجديدة ---
               async function handleTerminal(e) {
                 if (e.key !== 'Enter') return;
                 const cmd = e.target.value.trim();
@@ -643,26 +621,20 @@ jobs:
                 const out = document.getElementById('termOut');
                 out.innerText += `\n$ ${cmd}\n`;
 
-                // إذا كان الأمر يبدأ بـ pip install
                 if (cmd.startsWith('pip install ')) {
                   const pkg = cmd.replace('pip install ', '').trim();
                   const res = await callPython("install_pip_package", pkg);
                   out.innerText += res + '\n';
-                } 
-                // إذا كان أمر نظام (ls, pwd, إلخ)
-                else if (['ls', 'pwd', 'cat', 'echo'].some(c => cmd.startsWith(c))) {
+                } else if (['ls', 'pwd', 'cat', 'echo'].some(c => cmd.startsWith(c))) {
                   const res = await callPython("exec_system", cmd);
                   out.innerText += res + '\n';
-                } 
-                // خلاف ذلك، اعتبره كود بايثون
-                else {
+                } else {
                   const res = await callPython("exec_python", cmd);
                   if (res !== "OK") out.innerText += res + '\n';
                 }
                 out.scrollTop = out.scrollHeight;
               }
 
-              // بدء التشغيل
               refreshFiles();
               callPython("get_main_script").then(res => {
                 if(res) document.getElementById('mainFileInput').value = res;
@@ -672,7 +644,6 @@ jobs:
           </html>
           HTMLEOF
 
-          # 6. Icon
           if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; else
             printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"
           fi
