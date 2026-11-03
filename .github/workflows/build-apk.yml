@@ -1,27 +1,14 @@
-name: Build APK
+name: Build Advanced Python IDE (Terminal + Pip)
 
 on:
   workflow_dispatch:
     inputs:
       app_name:
         required: true
-        type: string
+        description: 'Python'
       package_name:
         required: true
-        type: string
-      html_source_url:
-        description: 'رابط ملف python-studio.html (مثلاً من GitHub Raw)'
-        required: true
-        type: string
-      icon_url:
-        required: false
-        type: string
-        default: ''
-      onesignal_app_id:
-        description: 'OneSignal App ID (اختياري)'
-        required: false
-        type: string
-        default: ''
+        description: 'com.my.pyide'
 
 permissions:
   contents: read
@@ -29,30 +16,29 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+        with: { distribution: 'temurin', java-version: '17' }
+
+      - name: Set up Python (for build)
+        uses: actions/setup-python@v5
+        with: { python-version: '3.12' } # متوافق مع Chaquopy 17
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: 8.2
+        with: { gradle-version: 8.7 } # Chaquopy 17 يدعم Gradle 8.6+
 
       - name: Setup Android SDK
         run: |
           mkdir -p $HOME/android-sdk/cmdline-tools
           cd $HOME/android-sdk/cmdline-tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
-          unzip -q cmdline.zip
-          mv cmdline-tools latest 2>/dev/null || mv cmdline latest
+          unzip -q cmdline.zip && mv cmdline-tools latest 2>/dev/null || mv cmdline latest
           rm cmdline.zip
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
@@ -60,21 +46,11 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Download HTML & Icon
-        run: |
-          mkdir -p /tmp/src
-          curl -L --fail -o /tmp/src/index.html "${{ inputs.html_source_url }}"
-          if [ -n "${{ inputs.icon_url }}" ]; then
-            curl -L --fail -o /tmp/icon.png "${{ inputs.icon_url }}" || true
-          fi
-
-      - name: Create Android project
+      - name: Create Android Project
         env:
           APP_NAME: ${{ inputs.app_name }}
           PKG_NAME: ${{ inputs.package_name }}
-          OS_APP_ID: ${{ inputs.onesignal_app_id }}
         run: |
           set -e
           PROJECT=/tmp/app
@@ -82,277 +58,632 @@ jobs:
 
           mkdir -p "$PROJECT/app/src/main/java/$PKG_PATH"
           mkdir -p "$PROJECT/app/src/main/res/values"
-          mkdir -p "$PROJECT/app/src/main/res/xml"
-          mkdir -p "$PROJECT/app/src/main/res/mipmap-hdpi"
           mkdir -p "$PROJECT/app/src/main/assets"
           mkdir -p "$PROJECT/app/src/main/python"
 
-          printf 'rootProject.name = "PythonStudio"\ninclude ":app"\n' > "$PROJECT/settings.gradle"
-
-          cat > "$PROJECT/build.gradle" << 'EOF'
-          buildscript { repositories { google(); mavenCentral() } dependencies { classpath 'com.android.tools.build:gradle:8.1.4' } }
-          allprojects { repositories { google(); mavenCentral() } }
+          # 1. Gradle Setup (Chaquopy 17.1.0 + Python 3.13)
+          cat > "$PROJECT/settings.gradle" << 'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal(); maven { url "https://chaquo.com/maven" } }
+          }
+          rootProject.name = "PyIDEApp"
+          include ':app'
           EOF
 
-          cat > "$PROJECT/app/build.gradle" << EOF
-          plugins { id 'com.android.application' }
+          cat > "$PROJECT/build.gradle" << 'EOF'
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+              id 'com.chaquo.python' version '17.1.0' apply false
+          }
+          EOF
+
+          cat > "$PROJECT/app/build.gradle" << 'EOF'
+          plugins { id 'com.android.application'; id 'com.chaquo.python' }
           android {
-              namespace '$PKG_NAME'
+              namespace 'PKG_NAME_PLACEHOLDER'
               compileSdk 34
-              defaultConfig { applicationId "$PKG_NAME"; minSdk 24; targetSdk 34; versionCode 1; versionName "1.0" }
+              defaultConfig {
+                  applicationId "PKG_NAME_PLACEHOLDER"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+                  ndk { abiFilters "arm64-v8a", "x86_64" }
+                  python {
+                      version "3.13" // استخدام أحدث إصدار مدعوم
+                      buildPython "python3"
+                      pip {
+                          // مكتبات النظام الأساسية (C++ / Native)
+                          install "requests"
+                          install "numpy"
+                          install "pandas"
+                          install "beautifulsoup4"
+                          install "lxml"
+                          install "flask"
+                          install "telethon"
+                          install "pycryptodome"
+                          install "pillow"
+                          // تضمين pip لدعم التثبيت الديناميكي للحزم النقية
+                          install "pip"
+                      }
+                  }
+              }
               compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
           }
           dependencies {
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'androidx.core:core:1.12.0'
               implementation 'androidx.webkit:webkit:1.10.0'
-              implementation 'com.onesignal:OneSignal:[4.7.4, 4.99.99]'
           }
           EOF
+          sed -i "s/PKG_NAME_PLACEHOLDER/$PKG_NAME/g" "$PROJECT/app/build.gradle"
 
-          printf 'android.useAndroidX=true\nandroid.enableJetifier=false\norg.gradle.jvmargs=-Xmx2048m\n' > "$PROJECT/gradle.properties"
-          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
+          # 2. Python Backend (runner.py) - مع دعم pip والطرفية
+          cat > "$PROJECT/app/src/main/python/runner.py" << 'PYEOF'
+          import os, sys, json, zipfile, shutil, runpy, traceback, io
+          import base64
+          import subprocess
+          import pip
 
-          cat > "$PROJECT/app/src/main/res/xml/file_paths.xml" << 'EOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <paths>
-              <external-path name="external" path="." />
-              <files-path name="files" path="." />
-              <cache-path name="cache" path="." />
-          </paths>
-          EOF
+          WORK_DIR = ""
+          LOG_FILE = ""
+          MAIN_SCRIPT = "main.py"
 
-          sort -u > /tmp/perms.txt << 'EOF'
-          android.permission.INTERNET
-          android.permission.ACCESS_NETWORK_STATE
-          android.permission.READ_EXTERNAL_STORAGE
-          android.permission.WRITE_EXTERNAL_STORAGE
-          android.permission.READ_MEDIA_IMAGES
-          android.permission.POST_NOTIFICATIONS
-          EOF
-          sed 's/^/    <uses-permission android:name="/; s/$/"\/>/' /tmp/perms.txt > /tmp/perms.xml
+          def init_env(w_dir, l_file):
+              global WORK_DIR, LOG_FILE
+              WORK_DIR = w_dir
+              LOG_FILE = l_file
+              os.makedirs(WORK_DIR, exist_ok=True)
+              sys.stdout = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+              sys.stderr = sys.stdout
+              print("> System Initialized (Python 3.13 + Pip)")
 
-          cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-          $(cat /tmp/perms.xml)
-              <application
-                  android:allowBackup="true"
-                  android:icon="@mipmap/ic_launcher"
-                  android:label="$APP_NAME"
-                  android:usesCleartextTraffic="true"
-                  android:requestLegacyExternalStorage="true"
-                  android:theme="@style/AppTheme">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
-                      android:windowSoftInputMode="adjustResize">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-                  <provider
-                      android:name="androidx.core.content.FileProvider"
-                      android:authorities="$PKG_NAME.fileprovider"
-                      android:exported="false"
-                      android:grantUriPermissions="true">
-                      <meta-data
-                          android:name="android.support.FILE_PROVIDER_PATHS"
-                          android:resource="@xml/file_paths" />
-                  </provider>
-              </application>
-          </manifest>
-          EOF
+          def set_main_script(name):
+              global MAIN_SCRIPT
+              MAIN_SCRIPT = name
+              return "OK"
 
-          cp /tmp/src/index.html "$PROJECT/app/src/main/assets/index.html"
-          if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; else
-            printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"
-          fi
+          def get_main_script():
+              return MAIN_SCRIPT
+
+          def list_files():
+              res = []
+              for root, dirs, files in os.walk(WORK_DIR):
+                  for d in dirs:
+                      p = os.path.relpath(os.path.join(root, d), WORK_DIR)
+                      res.append({"name": d, "path": p, "isDir": True})
+                  for f in files:
+                      p = os.path.relpath(os.path.join(root, f), WORK_DIR)
+                      res.append({"name": f, "path": p, "isDir": False})
+              return json.dumps(res)
+
+          def read_file(path):
+              p = os.path.join(WORK_DIR, path)
+              if not os.path.exists(p): return ""
+              with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                  return f.read()
+
+          def write_file(data_json):
+              data = json.loads(data_json)
+              p = os.path.join(WORK_DIR, data['path'])
+              os.makedirs(os.path.dirname(p), exist_ok=True) if os.path.dirname(p) else None
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(data['content'])
+              return "OK"
+
+          def delete_item(path):
+              p = os.path.join(WORK_DIR, path)
+              if os.path.isdir(p): shutil.rmtree(p)
+              elif os.path.exists(p): os.remove(p)
+              return "OK"
+
+          def make_dir(path):
+              p = os.path.join(WORK_DIR, path)
+              os.makedirs(p, exist_ok=True)
+              return "OK"
+
+          def unzip_file(path):
+              p = os.path.join(WORK_DIR, path)
+              with zipfile.ZipFile(p, 'r') as z:
+                  z.extractall(WORK_DIR)
+              return "OK"
+
+          def run_server():
+              print(f"> Starting {MAIN_SCRIPT}...")
+              target = os.path.join(WORK_DIR, MAIN_SCRIPT)
+              if not os.path.exists(target):
+                  print(f"❌ Error: {MAIN_SCRIPT} not found!")
+                  return
+              os.chdir(WORK_DIR)
+              sys.argv = [target]
+              try:
+                  runpy.run_path(target, run_name='__main__')
+              except Exception:
+                  traceback.print_exc()
+
+          # --- دوال الطرفية الجديدة ---
+          def exec_python(code):
+              """تنفيذ كود بايثون مباشر من الطرفية"""
+              try:
+                  # نستخدم exec لتشغيل الكود في مساحة العمل
+                  local_vars = {}
+                  exec(code, globals(), local_vars)
+                  return "OK"
+              except Exception as e:
+                  return f"Error: {e}"
+
+          def exec_system(cmd):
+              """تنفيذ أمر نظام أندرويد (مثل ls, pwd)"""
+              try:
+                  # subprocess قد لا يعمل مع كل الأوامر، لكنه يعمل مع أوامر shell الأساسية
+                  result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=WORK_DIR)
+                  output = result.stdout + result.stderr
+                  return output if output else "OK"
+              except Exception as e:
+                  return f"System Error: {e}"
+
+          def install_pip_package(package_name):
+              """محاولة تثبيت حزمة نقية ديناميكياً"""
+              try:
+                  # نحاول التثبيت باستخدام pip المدمج
+                  pip.main(['install', package_name])
+                  return f"OK"
+              except Exception as e:
+                  return f"Pip Error: {e}"
+          PYEOF
+
+          # 3. Java Bridge & Services
+          cat > "$PROJECT/app/src/main/java/$PKG_PATH/PythonService.java" << 'JAVAEOF'
+          package __PKG__;
+          import android.app.*; import android.content.Intent; import android.os.Build; import android.os.IBinder;
+          import androidx.core.app.NotificationCompat; import com.chaquo.python.Python; import com.chaquo.python.android.AndroidPlatform;
+
+          public class PythonService extends Service {
+              private static final String CHANNEL_ID = "py_service";
+              @Override public void onCreate() {
+                  super.onCreate();
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Python IDE", NotificationManager.IMPORTANCE_LOW);
+                      getSystemService(NotificationManager.class).createNotificationChannel(ch);
+                  }
+              }
+              @Override public int onStartCommand(Intent intent, int flags, int startId) {
+                  Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
+                          .setContentTitle("Python IDE is Running").setContentText("Script executing in background")
+                          .setSmallIcon(android.R.drawable.ic_media_play).setOngoing(true).build();
+                  startForeground(1, notif);
+                  new Thread(() -> {
+                      try {
+                          if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
+                          Python.getInstance().getModule("runner").callAttr("run_server");
+                      } catch (Exception e) {}
+                  }).start();
+                  return START_STICKY;
+              }
+              @Override public IBinder onBind(Intent intent) { return null; }
+          }
+          JAVAEOF
 
           cat > "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java" << 'JAVAEOF'
           package __PKG__;
-
-          import android.annotation.SuppressLint;
-          import android.app.DownloadManager;
-          import android.content.ActivityNotFoundException;
-          import android.content.Context;
-          import android.content.Intent;
-          import android.net.Uri;
-          import android.os.Bundle;
-          import android.os.Environment;
-          import android.view.WindowManager;
-          import android.webkit.CookieManager;
-          import android.webkit.DownloadListener;
-          import android.webkit.PermissionRequest;
-          import android.webkit.URLUtil;
-          import android.webkit.ValueCallback;
-          import android.webkit.WebChromeClient;
-          import android.webkit.WebResourceRequest;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-          import android.widget.Toast;
-          import androidx.appcompat.app.AppCompatActivity;
-          import androidx.webkit.WebViewAssetLoader;
-          import androidx.webkit.WebViewClientCompat;
-          import com.onesignal.OneSignal;
+          import android.content.Intent; import android.os.Build; import android.os.Bundle;
+          import android.webkit.*; import androidx.appcompat.app.AppCompatActivity;
+          import com.chaquo.python.PyObject; import com.chaquo.python.Python; import com.chaquo.python.android.AndroidPlatform;
+          import java.io.*;
 
           public class MainActivity extends AppCompatActivity {
               private WebView webView;
-              private ValueCallback<Uri[]> mFilePathCallback;
-              private static final int FILE_CHOOSER_RESULT_CODE = 1;
+              private Python py;
 
-              @SuppressLint("SetJavaScriptEnabled")
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
+              @Override protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
-
-                  String osAppId = "__OS_APP_ID__";
-                  if (!osAppId.isEmpty() && !osAppId.equals("__OS_APP_ID__")) {
-                      OneSignal.setAppId(osAppId);
-                      OneSignal.promptForPushNotifications();
-                  }
+                  if (!Python.isStarted()) Python.start(new AndroidPlatform(this));
+                  py = Python.getInstance();
+                  
+                  String workDir = getFilesDir().getAbsolutePath() + "/workspace";
+                  String logFile = getFilesDir().getAbsolutePath() + "/server.log";
+                  py.getModule("runner").callAttr("init_env", workDir, logFile);
 
                   webView = new WebView(this);
                   setContentView(webView);
-
                   WebSettings s = webView.getSettings();
-                  s.setJavaScriptEnabled(true);
-                  s.setDomStorageEnabled(true);
-                  s.setAllowFileAccess(true);
-                  s.setAllowContentAccess(true);
-                  s.setAllowFileAccessFromFileURLs(true);
-                  s.setAllowUniversalAccessFromFileURLs(true);
-                  s.setMediaPlaybackRequiresUserGesture(false);
-                  s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-                  s.setCacheMode(WebSettings.LOAD_DEFAULT);
-
-                  CookieManager.getInstance().setAcceptCookie(true);
-                  CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
-
-                  // تفعيل رفع الملفات لـ WebView (ضروري لـ Pyodide)
-                  webView.setWebChromeClient(new WebChromeClient() {
-                      @Override
-                      public void onPermissionRequest(final PermissionRequest request) {
-                          runOnUiThread(() -> request.grant(request.getResources()));
-                      }
-
-                      @Override
-                      public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
-                          if (mFilePathCallback != null) mFilePathCallback.onReceiveValue(null);
-                          mFilePathCallback = filePathCallback;
-                          
-                          Intent intent = fileChooserParams.createIntent();
-                          // تفعيل اختيار مجلدات (لو النظام يدعم)
-                          if (fileChooserParams.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
-                              intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-                          }
-                          
-                          try {
-                              startActivityForResult(intent, FILE_CHOOSER_RESULT_CODE);
-                          } catch (ActivityNotFoundException e) {
-                              mFilePathCallback = null;
-                              return false;
-                          }
-                          return true;
-                      }
-                  });
-
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                          return false; // تحميل عادي داخل التطبيق
-                      }
-                  });
-
-                  // دعم تحميل الملفات (ZIP) من داخل Pyodide
-                  webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength) -> {
-                      try {
-                          DownloadManager.Request request = new DownloadManager.Request(Uri.parse(url));
-                          if (mimeType != null && !mimeType.isEmpty()) request.setMimeType(mimeType);
-                          String cookies = CookieManager.getInstance().getCookie(url);
-                          if (cookies != null) request.addRequestHeader("cookie", cookies);
-                          if (userAgent != null) request.addRequestHeader("User-Agent", userAgent);
-                          
-                          String fileName = URLUtil.guessFileName(url, contentDisposition, mimeType);
-                          request.setDescription("جاري التحميل...");
-                          request.setTitle(fileName);
-                          request.allowScanningByMediaScanner();
-                          request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-                          request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
-                          
-                          DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
-                          if (dm != null) {
-                              dm.enqueue(request);
-                              Toast.makeText(getApplicationContext(), "📥 جاري التحميل: " + fileName, Toast.LENGTH_LONG).show();
-                          }
-                      } catch (Exception e) {
-                          Toast.makeText(getApplicationContext(), "❌ فشل التحميل: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                      }
-                  });
-
+                  s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
+                  s.setAllowFileAccess(true); s.setAllowFileAccessFromFileURLs(true); s.setAllowUniversalAccessFromFileURLs(true);
+                  
+                  webView.addJavascriptInterface(new PythonBridge(), "Android");
                   webView.loadUrl("file:///android_asset/index.html");
               }
 
-              @Override
-              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-                  if (requestCode == FILE_CHOOSER_RESULT_CODE) {
-                      if (mFilePathCallback == null) return;
-                      Uri[] results = null;
-                      if (resultCode == RESULT_OK && data != null) {
-                          String dataString = data.getDataString();
-                          if (dataString != null) {
-                              results = new Uri[]{Uri.parse(dataString)};
-                          } else if (data.getClipData() != null) {
-                              int count = data.getClipData().getItemCount();
-                              results = new Uri[count];
-                              for (int i = 0; i < count; i++) {
-                                  results[i] = data.getClipData().getItemAt(i).getUri();
-                              }
+              public class PythonBridge {
+                  @JavascriptInterface public void callPy(String func, String args, String reqId) {
+                      new Thread(() -> {
+                          try {
+                              PyObject res = py.getModule("runner").callAttr(func, args);
+                              String out = res != null ? res.toString() : "";
+                              String safe = out.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "");
+                              webView.post(() -> webView.evaluateJavascript("window.onPyResult('" + reqId + "', '" + safe + "')", null));
+                          } catch (Exception e) {
+                              String err = e.getMessage() != null ? e.getMessage().replace("'", "\\'") : "Error";
+                              webView.post(() -> webView.evaluateJavascript("window.onPyResult('" + reqId + "', JSON.stringify({error:'" + err + "'}))", null));
                           }
-                      }
-                      mFilePathCallback.onReceiveValue(results);
-                      mFilePathCallback = null;
-                  } else {
-                      super.onActivityResult(requestCode, resultCode, data);
+                      }).start();
                   }
-              }
+                  
+                  @JavascriptInterface public void callPyBinary(String func, String base64Data, String fileName, String reqId) {
+                      new Thread(() -> {
+                          try {
+                              PyObject res = py.getModule("runner").callAttr(func, base64Data, fileName);
+                              webView.post(() -> webView.evaluateJavascript("window.onPyResult('" + reqId + "', '" + res.toString() + "')", null));
+                          } catch (Exception e) {}
+                      }).start();
+                  }
 
-              @Override
-              public void onBackPressed() {
-                  if (webView.canGoBack()) webView.goBack();
-                  else super.onBackPressed();
+                  @JavascriptInterface public void startServer() {
+                      Intent i = new Intent(MainActivity.this, PythonService.class);
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i); else startService(i);
+                  }
+                  @JavascriptInterface public void stopServer() { stopService(new Intent(MainActivity.this, PythonService.class)); }
+                  @JavascriptInterface public String getLogs() {
+                      try {
+                          File f = new File(getFilesDir(), "server.log");
+                          if (!f.exists()) return "";
+                          BufferedReader br = new BufferedReader(new FileReader(f));
+                          StringBuilder sb = new StringBuilder(); String line;
+                          while ((line = br.readLine()) != null) sb.append(line).append("\n");
+                          br.close(); return sb.toString();
+                      } catch (Exception e) { return ""; }
+                  }
+                  @JavascriptInterface public void clearLogs() {
+                      try { new FileOutputStream(new File(getFilesDir(), "server.log")).close(); } catch (Exception e) {}
+                  }
               }
           }
           JAVAEOF
 
-          sed -i "s/__PKG__/$PKG_NAME/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
-          sed -i "s/__OS_APP_ID__/$OS_APP_ID/g" "$PROJECT/app/src/main/java/$PKG_PATH/MainActivity.java"
+          # 4. Manifest
+          cat > "$PROJECT/app/src/main/AndroidManifest.xml" << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+              <application android:allowBackup="true" android:icon="@mipmap/ic_launcher" android:label="$APP_NAME" android:usesCleartextTraffic="true" android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+                  </activity>
+                  <service android:name=".PythonService" android:foregroundServiceType="dataSync" />
+              </application>
+          </manifest>
+          EOF
 
-          printf '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">\n        <item name="android:windowLightStatusBar">false</item>\n        <item name="android:statusBarColor">#0b0e14</item>\n        <item name="android:navigationBarColor">#0b0e14</item>\n    </style>\n</resources>\n' > "$PROJECT/app/src/main/res/values/styles.xml"
+          # 5. Frontend IDE (index.html)
+          cat > "$PROJECT/app/src/main/assets/index.html" << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html lang="ar" dir="ltr">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <title>PyIDE Pro</title>
+            <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;800&family=Fira+Code&display=swap" rel="stylesheet">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+            <style>
+              :root { --bg:#0d1117; --panel:#161b22; --border:#30363d; --txt:#c9d1d9; --acc:#58a6ff; --ok:#2ea043; --err:#f85149; }
+              * { box-sizing: border-box; margin: 0; padding: 0; }
+              body { font-family: 'Cairo', sans-serif; background: var(--bg); color: var(--txt); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+              
+              header { background: var(--panel); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+              .logo { font-weight: 800; font-size: 18px; color: #fff; display: flex; align-items: center; gap: 8px; }
+              .logo span { color: var(--acc); }
+              .actions { display: flex; gap: 8px; }
+              .btn { padding: 8px 16px; border: none; border-radius: 6px; font-weight: 600; font-family: inherit; cursor: pointer; font-size: 13px; transition: 0.2s; }
+              .btn-run { background: var(--ok); color: #fff; }
+              .btn-run:disabled { opacity: 0.5; }
+              .btn-stop { background: var(--err); color: #fff; }
+              
+              .main-layout { flex: 1; display: flex; overflow: hidden; }
+              
+              /* Sidebar */
+              .sidebar { width: 220px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+              .side-header { padding: 10px; font-size: 12px; font-weight: 700; color: #8b949e; display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); }
+              .side-header button { background: none; border: none; color: var(--acc); font-size: 16px; cursor: pointer; }
+              #fileList { flex: 1; overflow-y: auto; padding: 8px; }
+              .file-item { padding: 6px 8px; font-family: 'Fira Code', monospace; font-size: 13px; cursor: pointer; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+              .file-item:hover { background: rgba(255,255,255,0.05); }
+              .file-item.active { background: rgba(88,166,255,0.1); color: var(--acc); }
+              .file-item .del { color: var(--err); font-size: 12px; display: none; }
+              .file-item:hover .del { display: block; }
+              
+              /* Editor Area */
+              .editor-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+              #editorHost { flex: 1; overflow: hidden; }
+              .CodeMirror { height: 100% !important; font-family: 'Fira Code', monospace !important; font-size: 14px; background: var(--bg) !important; }
+              .CodeMirror-gutters { background: var(--bg) !important; border-right: 1px solid var(--border) !important; }
+              
+              /* Terminal */
+              .terminal { height: 35%; background: #000; border-top: 1px solid var(--border); display: flex; flex-direction: column; }
+              .term-header { background: #161b22; padding: 6px 12px; font-size: 12px; color: #8b949e; display: flex; justify-content: space-between; align-items: center; }
+              .term-body { flex: 1; padding: 10px; overflow-y: auto; font-family: 'Fira Code', monospace; font-size: 12px; color: #3fb950; direction: ltr; text-align: left; white-space: pre-wrap; }
+              .term-body .err { color: var(--err); }
+              .term-input { width: 100%; background: #000; border: none; border-top: 1px solid var(--border); color: #fff; padding: 8px 10px; font-family: 'Fira Code', monospace; font-size: 12px; outline: none; }
+              
+              /* Settings Panel */
+              .settings-panel { width: 250px; background: var(--panel); border-left: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 16px; }
+              .settings-panel h3 { font-size: 13px; color: #8b949e; margin-bottom: 6px; }
+              .settings-panel input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 4px; font-family: monospace; font-size: 12px; }
+              .settings-panel button { background: var(--acc); color: #000; padding: 8px; border: none; border-radius: 4px; font-weight: 700; cursor: pointer; width: 100%; margin-top: 6px; }
+              
+              .lib-tag { background: rgba(88,166,255,0.1); color: var(--acc); border: 1px solid rgba(88,166,255,0.3); padding: 4px 8px; border-radius: 4px; font-family: monospace; font-size: 11px; display: inline-block; margin: 2px; }
+              
+              /* Modal */
+              .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; z-index: 999; }
+              .modal.on { display: flex; }
+              .modal-content { background: var(--panel); padding: 20px; border-radius: 8px; width: 300px; border: 1px solid var(--border); }
+              .modal-content input { width: 100%; padding: 10px; margin: 10px 0; background: var(--bg); border: 1px solid var(--border); color: #fff; }
+              .modal-content button { width: 100%; padding: 10px; background: var(--ok); border: none; color: #fff; font-weight: bold; cursor: pointer; }
+            </style>
+          </head>
+          <body>
+            <header>
+              <div class="logo"><span>⬢</span> PyIDE Pro (Python 3.13)</div>
+              <div class="actions">
+                <button class="btn btn-run" id="btnRun" onclick="startServer()">▶ RUN</button>
+                <button class="btn btn-stop" id="btnStop" onclick="stopServer()" disabled>⏹ STOP</button>
+              </div>
+            </header>
 
-          echo "✅ Project Created Successfully"
+            <div class="main-layout">
+              <!-- File Explorer -->
+              <div class="sidebar">
+                <div class="side-header">
+                  <span>EXPLORER</span>
+                  <div>
+                    <button onclick="createNode(false)">📄+</button>
+                    <button onclick="createNode(true)">📁+</button>
+                    <button onclick="document.getElementById('fileIn').click()">⬆</button>
+                  </div>
+                </div>
+                <div id="fileList"></div>
+              </div>
+
+              <!-- Editor & Terminal -->
+              <div class="editor-area">
+                <div id="editorHost">
+                  <textarea id="codeEditor"></textarea>
+                </div>
+                <div class="terminal">
+                  <div class="term-header">
+                    <span>TERMINAL (Python / Shell)</span>
+                    <span style="cursor:pointer" onclick="clearLogs()">Clear</span>
+                  </div>
+                  <div class="term-body" id="termOut">> Waiting for commands...</div>
+                  <input type="text" class="term-input" id="termInput" placeholder="Type Python code or shell command (e.g. print('hi'), ls)..." onkeydown="handleTerminal(event)">
+                </div>
+              </div>
+
+              <!-- Settings -->
+              <div class="settings-panel">
+                <div>
+                  <h3>Main File (ملف التشغيل)</h3>
+                  <input type="text" id="mainFileInput" value="main.py">
+                  <button onclick="saveMainFile()">تغيير الملف الرئيسي</button>
+                </div>
+                <div>
+                  <h3>المكتبات المثبتة مسبقاً</h3>
+                  <div>
+                    <span class="lib-tag">requests</span>
+                    <span class="lib-tag">numpy</span>
+                    <span class="lib-tag">pandas</span>
+                    <span class="lib-tag">bs4</span>
+                    <span class="lib-tag">flask</span>
+                    <span class="lib-tag">telethon</span>
+                    <span class="lib-tag">pillow</span>
+                  </div>
+                </div>
+                <div>
+                  <h3>تثبيت مكتبة نقية (Pip)</h3>
+                  <input type="text" id="pipInput" placeholder="e.g. colorama">
+                  <button onclick="installPip()">Install Pure Package</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Modals -->
+            <div class="modal" id="promptModal">
+              <div class="modal-content">
+                <h3 id="promptTitle">Enter Name</h3>
+                <input type="text" id="promptInput">
+                <button onclick="submitPrompt()">OK</button>
+              </div>
+            </div>
+
+            <input type="file" id="fileIn" hidden>
+
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+            <script>
+              let editor, activeFile = null, pendingCalls = {}, reqId = 0;
+              let isRunning = false;
+
+              editor = CodeMirror.fromTextArea(document.getElementById('codeEditor'), {
+                mode: 'python', theme: 'material-darker', lineNumbers: true, lineWrapping: true
+              });
+
+              function callPython(func, args = "") {
+                return new Promise((resolve) => {
+                  const id = "req_" + (++reqId);
+                  pendingCalls[id] = resolve;
+                  window.Android.callPy(func, args, id);
+                });
+              }
+
+              window.onPyResult = function(id, result) {
+                if (pendingCalls[id]) {
+                  pendingCalls[id](result);
+                  delete pendingCalls[id];
+                }
+              };
+
+              async function refreshFiles() {
+                const res = await callPython("list_files");
+                try {
+                  const files = JSON.parse(res);
+                  const list = document.getElementById('fileList');
+                  list.innerHTML = '';
+                  files.forEach(f => {
+                    const div = document.createElement('div');
+                    div.className = `file-item ${activeFile === f.path ? 'active' : ''}`;
+                    div.innerHTML = `<span>${f.isDir ? '📁' : '📄'} ${f.name}</span><span class="del" onclick="delNode(event, '${f.path}')">🗑</span>`;
+                    if (!f.isDir) div.onclick = () => openFile(f.path);
+                    list.appendChild(div);
+                  });
+                } catch(e) {}
+              }
+
+              async function openFile(path) {
+                activeFile = path;
+                const content = await callPython("read_file", path);
+                editor.setValue(content);
+                refreshFiles();
+              }
+
+              function delNode(e, path) {
+                e.stopPropagation();
+                if (!confirm(`Delete ${path}?`)) return;
+                callPython("delete_item", path).then(() => {
+                  if (activeFile === path) { editor.setValue(''); activeFile = null; }
+                  refreshFiles();
+                });
+              }
+
+              let promptMode = null;
+              function createNode(isDir) {
+                promptMode = isDir ? 'dir' : 'file';
+                document.getElementById('promptTitle').textContent = isDir ? 'New Folder Name' : 'New File Name';
+                document.getElementById('promptInput').value = isDir ? 'folder' : 'script.py';
+                document.getElementById('promptModal').classList.add('on');
+              }
+              
+              function submitPrompt() {
+                const val = document.getElementById('promptInput').value.trim();
+                document.getElementById('promptModal').classList.remove('on');
+                if (!val) return;
+                if (promptMode === 'dir') callPython("make_dir", val).then(refreshFiles);
+                else callPython("write_file", JSON.stringify({path: val, content: ''})).then(() => { refreshFiles(); openFile(val); });
+              }
+
+              // رفع الملفات
+              document.getElementById('fileIn').onchange = function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function() {
+                  const b64 = reader.result.split(',')[1];
+                  const id = "bin_" + (++reqId);
+                  pendingCalls[id] = function(res) {
+                    if (file.name.endsWith('.zip')) {
+                      callPython("unzip_file", file.name).then(() => {
+                        refreshFiles();
+                        alert("تم فك الضغط بنجاح!");
+                      });
+                    } else {
+                      refreshFiles();
+                    }
+                  };
+                  window.Android.callPyBinary("write_binary", b64, file.name, id);
+                };
+                reader.readAsDataURL(file);
+              };
+
+              async function startServer() {
+                if (isRunning) return;
+                isRunning = true;
+                document.getElementById('btnRun').disabled = true;
+                document.getElementById('btnStop').disabled = false;
+                window.Android.startServer();
+                startLogPolling();
+              }
+
+              function stopServer() {
+                isRunning = false;
+                document.getElementById('btnRun').disabled = false;
+                document.getElementById('btnStop').disabled = true;
+                window.Android.stopServer();
+              }
+
+              function saveMainFile() {
+                const val = document.getElementById('mainFileInput').value.trim();
+                callPython("set_main_script", val).then(() => alert("الملف الرئيسي أصبح: " + val));
+              }
+
+              function startLogPolling() {
+                setInterval(() => {
+                  if (!isRunning) return;
+                  const logs = window.Android.getLogs();
+                  if (logs) {
+                    const out = document.getElementById('termOut');
+                    out.innerText = logs;
+                    out.scrollTop = out.scrollHeight;
+                  }
+                }, 1000);
+              }
+
+              function clearLogs() {
+                window.Android.clearLogs();
+                document.getElementById('termOut').innerText = "> Logs cleared.";
+              }
+
+              // --- دالة الطرفية الجديدة ---
+              async function handleTerminal(e) {
+                if (e.key !== 'Enter') return;
+                const cmd = e.target.value.trim();
+                if (!cmd) return;
+                e.target.value = '';
+
+                const out = document.getElementById('termOut');
+                out.innerText += `\n$ ${cmd}\n`;
+
+                // إذا كان الأمر يبدأ بـ pip install
+                if (cmd.startsWith('pip install ')) {
+                  const pkg = cmd.replace('pip install ', '').trim();
+                  const res = await callPython("install_pip_package", pkg);
+                  out.innerText += res + '\n';
+                } 
+                // إذا كان أمر نظام (ls, pwd, إلخ)
+                else if (['ls', 'pwd', 'cat', 'echo'].some(c => cmd.startsWith(c))) {
+                  const res = await callPython("exec_system", cmd);
+                  out.innerText += res + '\n';
+                } 
+                // خلاف ذلك، اعتبره كود بايثون
+                else {
+                  const res = await callPython("exec_python", cmd);
+                  if (res !== "OK") out.innerText += res + '\n';
+                }
+                out.scrollTop = out.scrollHeight;
+              }
+
+              // بدء التشغيل
+              refreshFiles();
+              callPython("get_main_script").then(res => {
+                if(res) document.getElementById('mainFileInput').value = res;
+              });
+            </script>
+          </body>
+          </html>
+          HTMLEOF
+
+          # 6. Icon
+          if [ -f /tmp/icon.png ]; then cp /tmp/icon.png "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"; else
+            printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' | base64 -d > "$PROJECT/app/src/main/res/mipmap-hdpi/ic_launcher.png"
+          fi
 
       - name: Build APK
         run: |
           cd /tmp/app
-          gradle assembleDebug --no-daemon 2>&1 | tee build.log
-          EXIT_CODE=${PIPESTATUS[0]}
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "=========================================="
-            echo "❌ Build Failed!"
-            echo "=========================================="
-            grep -B 2 -A 20 -i "What went wrong" build.log || true
-            exit 1
-          fi
+          gradle assembleDebug --no-daemon
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: /tmp/app/**/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 7
